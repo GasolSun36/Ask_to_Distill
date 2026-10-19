@@ -1,0 +1,108 @@
+diff --git a/LLM_CALL.py b/LLM_CALL.py
+index e5ba645..62d2372 100644
+--- a/LLM_CALL.py
++++ b/LLM_CALL.py
+@@ -312,6 +312,36 @@ def get_openai_client():
+     print("OpenAI instance created successfully.")
+     return client
+ 
++def get_direct_openai_client():
++    """Plain OpenAI client for a key we hold directly, instead of NVIDIA's OAuth proxy.
++
++    get_azure_openai_client() needs CLIENT_ID/CLIENT_SECRET to mint a token
++    against prod.api.nvidia.com. With an ordinary OpenAI key there is nothing to
++    mint, so this builds the client from OPENAI_API_KEY/OPENAI_BASE_URL instead.
++
++    Accept-Encoding is pinned to gzip on purpose: this machine has brotli 1.0.9
++    while httpx calls Decompressor.process(..., output_buffer_limit=) which
++    landed in brotli 1.1, so every br-encoded response dies as
++    APIConnectionError: Connection error.
++    """
++    import pathlib
++    env_file = os.environ.get("TAU2_OPENAI_ENV")
++    if env_file and pathlib.Path(env_file).exists():
++        for line in pathlib.Path(env_file).read_text().splitlines():
++            line = line.strip()
++            if not line or line.startswith("#") or "=" not in line:
++                continue
++            line = line[len("export "):] if line.startswith("export ") else line
++            k, _, v = line.partition("=")
++            os.environ[k.strip()] = v.strip().strip('"').strip("'")
++    return OpenAI(
++        api_key=os.environ["OPENAI_API_KEY"],
++        base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
++        default_headers={"Accept-Encoding": "gzip"},
++        timeout=120,
++    )
++
++
+ def get_llm_response(model, messages, temperature=1.0, return_raw_response=False, tools=None, show_messages=False, model_type=None, max_length=1024, model_config=None, model_config_idx=0, model_config_path=None, payload=None, openai_client_type='azure_openai', **kwargs):
+     if isinstance(messages,str):
+         messages = [{'role': 'user','content': messages}]
+@@ -326,7 +356,11 @@ def get_llm_response(model, messages, temperature=1.0, return_raw_response=False
+         while answer=='':
+             try:
+                 if openai_client_type == 'azure_openai':
+-                    openai_client = get_azure_openai_client()
++                    # TAU2_OPENAI_DIRECT=1 swaps the OAuth proxy for a held key
++                    # without touching any of the call sites.
++                    openai_client = (get_direct_openai_client()
++                                     if os.environ.get("TAU2_OPENAI_DIRECT") == "1"
++                                     else get_azure_openai_client())
+                     chat_completion = openai_client.chat.completions.create(
+                         model=model,
+                         messages = messages,
+diff --git a/evaluation/tau2-bench/tau2/utils/llm_utils.py b/evaluation/tau2-bench/tau2/utils/llm_utils.py
+index 25f306a..5d3a6bb 100644
+--- a/evaluation/tau2-bench/tau2/utils/llm_utils.py
++++ b/evaluation/tau2-bench/tau2/utils/llm_utils.py
+@@ -186,6 +186,12 @@ if USE_LANGFUSE:
+ 
+ litellm.drop_params = True
+ 
++# Per-turn generation budget for the served agent. It was hardcoded at 8000,
++# which is fine for a non-thinking model but lets a thinking one spend the whole
++# budget inside <think> and get truncated before it answers. Configurable so both
++# modes can be given the same generous budget and stay comparable.
++_AGENT_MAX_TOKENS = int(os.environ.get("TAU2_MAX_TOKENS", "8000"))
++
+ if LLM_CACHE_ENABLED:
+     if DEFAULT_LLM_CACHE_TYPE == "redis":
+         logger.info(f"LiteLLM: Using Redis cache at {REDIS_HOST}:{REDIS_PORT}")
+@@ -413,7 +419,17 @@ def to_litellm_messages(messages: list[Message], model, use_model_tool, domain,
+                 if use_model_tool:
+                     for s in POLICY_STRINGS:
+                         cur_content = cur_content.replace(s,EXPERT_POLICT)
+-                litellm_messages.append({"role": "system", "content": cur_content + '  You are dedicated to provide the best service. Wrap thinking process between <think> </think>, message between <message> </message> and the tool call between <tool_call> </tool_call> .'})
++                # This suffix is ToolOrchestra's own output contract, not part of
++                # tau2-bench. It asks for a <think> block, which contradicts a
++                # non-thinking run, and for <tool_call> tags, which are redundant
++                # when the server is started with --tool-call-parser hermes. Off
++                # unless a run explicitly opts back in.
++                # Dropping it is safe for parsing: the <message> extraction below
++                # is guarded on the tags being present, and split('</think>') is a
++                # no-op when the model never emits one.
++                if os.environ.get("TAU2_ORCHESTRATOR_PROMPT") == "1":
++                    cur_content = cur_content + '  You are dedicated to provide the best service. Wrap thinking process between <think> </think>, message between <message> </message> and the tool call between <tool_call> </tool_call> .'
++                litellm_messages.append({"role": "system", "content": cur_content})
+             else:
+                 litellm_messages.append({"role": "system", "content": message.content})
+     if role == 'assistant' and 'gpt-5' in model.lower():
+@@ -519,7 +535,7 @@ def generate(
+         if 'nemotron-ultra' in model.lower() or 'nemotron-super' in model.lower():
+             response = get_llm_response(model=model, messages=updated_messages, tools=updated_tools, return_raw_response=True, temperature=1, model_type='nv/dev', max_length=8000)
+         else:
+-            response = get_llm_response(model=model, messages=updated_messages, tools=updated_tools, return_raw_response=True, temperature=1, model_config=model_config, model_config_path=model_config_path, model_config_idx=config_idx, model_type='vllm', max_length=8000)
++            response = get_llm_response(model=model, messages=updated_messages, tools=updated_tools, return_raw_response=True, temperature=1, model_config=model_config, model_config_path=model_config_path, model_config_idx=config_idx, model_type='vllm', max_length=_AGENT_MAX_TOKENS)
+         mode_to_call = None
+         tool_calls = []
+         input_tokens = 0
+@@ -576,7 +592,7 @@ def generate(
+                     model_config = json.load(f)[mode_to_call]
+                 tools_length = len(tokenizer(str(original_tools))['input_ids'])
+                 cut_messages = cut_middle_turns(tokenizer=tokenizer, messages=litellm_messages, max_length=23000 - tools_length)
+-                response = get_llm_response(model=mode_to_call, messages=cut_messages, tools=original_tools, return_raw_response=True, model_config=model_config, model_config_path=model_config_path, model_config_idx=config_idx, model_type='vllm', max_length=8000)
++                response = get_llm_response(model=mode_to_call, messages=cut_messages, tools=original_tools, return_raw_response=True, model_config=model_config, model_config_path=model_config_path, model_config_idx=config_idx, model_type='vllm', max_length=_AGENT_MAX_TOKENS)
+             else:
+                 raise ValueError(f'Model {mode_to_call} is not supported')
+             

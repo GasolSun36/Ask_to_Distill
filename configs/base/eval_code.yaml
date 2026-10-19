@@ -1,0 +1,63 @@
+# Code evaluation (shared by the three Code_* pairs): the protocol the reported
+# numbers were computed with.
+eval:
+  # TAG is always <experiment>_step<N>. LCB's
+  # --continue_existing keys its cached generations on the tag, so a tag reused
+  # across runs (e.g. the basename "step_150-nothink") silently
+  # scores another run's generations. Rendered by run_code_eval, not interpolated.
+  tag: "{experiment}_step{step}"
+  prompt_style: ???                                          # the student's style (`python -m ask2distill.eval.code.prompt_style`)
+  think: false                                               # non-thinking evaluation protocol
+  lcb:
+    version: v5_v6                                           # test5 + test6 = 342 problems
+    dataset: livecodebench/code_generation_lite
+    dataset_revision: 0fe84c3912ea0c4d4a78037083943e8f0c4dd505   # pinned (the patched loader reads the shard jsonl)
+    n: 4
+    temperature: 0.7                                         # non-thinking sampling (Qwen3 model card)
+    top_p: 0.8
+    top_k: 20
+    min_p: 0
+    max_tokens: 8192                                         # non-thinking generation budget
+    max_model_len: 16384                                     # capped at the model's context
+    stop: "<|im_end|>"
+    timeout: 6
+    num_process_evaluate: 24
+    tp: 2                                                    # GPUs of the 2-GPU eval job
+    continue_existing: true
+    cwd: ${paths.out}/eval/code/_lcb_cwd                     # LCB writes output/<TAG>/ under its cwd
+  evalplus:                                                  # official protocol: greedy, assistant prefill
+    datasets: [mbpp, humaneval]                              # final checkpoints; HE+ reported, not in Avg
+    greedy: true
+    max_new_tokens: 1024
+    max_model_len: 4096
+    parallel: 24
+    tp: 2
+  curve_evalplus_datasets: [mbpp]                            # curve points skip HE+
+  # MBPP's required function name lives in the prompt's assert, and training on
+  # competitive-programming problems (which never impose one) drifts that habit,
+  # so strict and lenient scores of one model can differ. Scoring both
+  # keeps "cannot solve it" separate from "renamed it".
+  mbpp_lenient: true
+  extra_bench:
+    benches: [apps_introductory, apps_interview1k, apps_competition, codecontests]
+    data_dir: ${paths.data}/eval/code/extra_bench
+    n: 1
+    temperature: 0.2
+    top_p: 0.95
+    top_k: 20
+    max_new: 4096
+    max_model_len_extra: 4096                                # max_model_len = max_new + 4096
+    tp: 2
+    util: 0.9
+    system_prompt: "You are a helpful assistant."
+    nothink_close: true                                      # close a dangling <think>
+    extraction: CodeQwenInstruct                             # LCB extract_code style
+    num_process_evaluate: 24
+    timeout: 6
+    detail: false                                            # opt-in per-problem output
+    limit: null                                              # first k problems (smoke); null = all
+  # vLLM sizes its KV cache for gpu_memory_utilization, then captures CUDA graphs
+  # on top; a 32B model at 0.9 overshoots by ~8GB and dies during capture.
+  big_model_rule: {weights_gb_per_gpu_gt: 10, util: 0.85, enforce_eager: true, default_util: 0.9}
+  avg_items: [lcb, mbpp_plus_lenient, apps_introductory, apps_interview1k, apps_competition, codecontests]
+  out_dir: ${paths.out}/eval/code                            # <TAG>/{livecodebench_v5_v6_eval.json, evalplus/, evalplus_mbpp_lenient.log, xb/}

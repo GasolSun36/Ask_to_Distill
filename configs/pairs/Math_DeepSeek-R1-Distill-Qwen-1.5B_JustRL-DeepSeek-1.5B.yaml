@@ -1,0 +1,60 @@
+# Math_DeepSeek-R1-Distill-Qwen-1.5B_JustRL-DeepSeek-1.5B
+# Math pair: student DeepSeek-R1-Distill-Qwen-1.5B <- teacher JustRL-DeepSeek-1.5B.
+# Per-pair values; shared values are in configs/base/ (paper Appendix A.2). Selection,
+# bank and OPD values are those of the released runs.
+_base_: [../base/opd.yaml, ../base/math.yaml, ../base/eval_math.yaml]
+pair: Math_DeepSeek-R1-Distill-Qwen-1.5B_JustRL-DeepSeek-1.5B
+
+models:
+  student: ${paths.models}/DeepSeek-R1-Distill-Qwen-1.5B
+  teacher: ${paths.models}/JustRL-DeepSeek-1.5B
+  # Same weights as the student with a chat template that closes <think>
+  # immediately: the DeepSeek analogue of enable_thinking=False.
+  synthesizer_init: ${paths.models}/DeepSeek-R1-Distill-Qwen-1.5B-SynNoThink
+  qwen3_nothink: false
+  syn_nothink: true                                          # built by `a2d models syn-nothink --pair Math_DeepSeek-R1-Distill-Qwen-1.5B_JustRL-DeepSeek-1.5B`
+  hf:
+    student: {repo: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B, revision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562}
+    teacher: {repo: hbx/JustRL-DeepSeek-1.5B, revision: 0637e4096c789c67f9eecbe8355e0bdeddede1c2}
+    embedder: {repo: Qwen/Qwen3-Embedding-4B, revision: 5cf2132abc99cad020ac570b19d031efec650f2b}
+
+calib:
+  expected_delta_ref: 0.4411
+
+reward:
+  delta_ref: 0.4411                                          # round(p95, 4)
+
+synrl:
+  experiment: "synthesizer_${pair}"
+  offload: false
+  gpu_memory_utilization: 0.6
+
+select:
+  # Yield = saturation emb count of 5000 questions at seed 100.
+  yield: {candidates: [10, 40, 60], n: 5000, seed: 100, bank_n: 64, tie: earliest}
+  chosen_step: 40
+
+harvest:
+  shards: 16
+
+filter:
+  slices: [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]]
+  aggregate: true
+  agg_order: [0, 1, 2, 3]
+
+bank:
+  name: ${pair}
+  row_id_prefix: b15arm                                      # extra_info.index of the released bank
+  n: 12800                                                   # 200 steps x 64
+  pool: ${filter.pool}
+
+opd:
+  chat_template_args: ""                                     # DeepSeek template has no thinking switch
+  arms:
+    ours: {train: "${bank.released}", experiment: "opd_${pair}_ours", total_epochs: 2, save_freq: 10,
+           ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}
+    # Vanilla ran on the plain launcher defaults, including 32768 tokens / micro
+    # batch 8 where every other arm used 16384 / 4.
+    # token-mean is computed per micro-batch, so this changes the loss weighting.
+    vanilla: {train: "${paths.data}/real/DAPO-Math-17k.parquet", experiment: "opd_${pair}_vanilla",
+              total_epochs: 2, save_freq: 20, ppo_max_token_len_per_gpu: 32768, reward_micro_bs: 8}

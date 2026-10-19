@@ -1,0 +1,80 @@
+# Smoke for the math pipeline on ONE single-node job with 2x A100-80GB.
+# Checks plumbing only: no number is compared with the paper.
+#   a2d <stage> --config configs/smoke/math_smoke.yaml [overrides]
+# Shared smoke rules: private Ray / ports per job; every single-GPU actor is
+# Qwen3-1.7B; ppo_mini_batch_size == train_batch_size (verl's fsdp_workers
+# would otherwise normalise the mini-batch to more rows than exist); one save
+# at the last step, keep 1. With one reward rank the bleu diversity share is
+# computed over the whole 8-question step on that rank.
+_base_: [../pairs/Math_Qwen3-1.7B_Qwen3-4B-Non-Thinking-RL-Math-Step500.yaml]
+smoke: true
+
+calib:
+  n_questions: 16                                            # N_cal of the smoke
+  question_sampling: {max_new: 512, gpu_memory_utilization: 0.4}
+  max_new: 1024
+  gpu_memory_utilization: 0.4                                # student vLLM on GPU0
+  teacher_device: cuda:1                                     # teacher HF on GPU1
+
+reward:
+  max_new: 1024
+
+synrl:
+  experiment: "synthesizer_${pair}_smoke"
+  layout: {actor_gpus: 1, reward_gpus: 1, reward_nnodes: 1, enable_resource_pool: true}
+  train_batch_size: 2
+  ppo_mini_batch_size: 2
+  rollout_n: 4                                               # 8 questions per step
+  max_response_length: 512
+  ppo_max_token_len_per_gpu: 4096
+  max_num_batched_tokens: 4096
+  total_steps: 3
+  save_freq: 3
+  offload: true
+  gpu_memory_utilization: 0.35                               # actor stays fp32 (1.7B is ~27GB of state)
+  extra_overrides: ["+trainer.max_actor_ckpt_to_keep=1"]
+
+select:
+  sweep: {steps: [3], n: 16, max_new: 512}
+  pick: {min_rows: 8, allow_empty: true}                     # relaxed gates: falls back to the last step and warns
+  yield: null
+  chosen_step: 3
+
+harvest:
+  shards: 2
+  per_shard: 64
+  max_new: 512
+
+filter:
+  slices: [[0, 1]]
+
+bank:
+  name: "${pair}_smoke"                                      # the smoke bank stage writes ${bank.out}
+  n: 32
+  allow_short: true
+  # OPD Ours trains on the pair's RELEASED bank, not on the 32-row smoke
+  # bank: `released` would otherwise follow bank.name to a file that never exists.
+  released: ${paths.data}/banks/${pair}.parquet
+
+opd:
+  n_gpus_per_node: 2
+  mini_batch_size: 8
+  n_responses: 2
+  max_response_length: 1024
+  max_val_response_length: 1024
+  rollout_gpu_memory_utilization: 0.4
+  esi_save: false
+  train_max_samples: 64
+  val_max_samples: 8
+  # Ours: 2 steps on the released bank. For the 1-step Vanilla check pass
+  # opd.extra_overrides='[trainer.total_training_steps=1]' on the command line.
+  extra_overrides: ["trainer.total_training_steps=2", "+trainer.max_actor_ckpt_to_keep=1"]
+  arms:
+    ours: {experiment: "opd_${pair}_smoke_ours", save_freq: 2, ppo_max_token_len_per_gpu: 2048}
+    vanilla: {experiment: "opd_${pair}_smoke_vanilla", save_freq: 1000, ppo_max_token_len_per_gpu: 2048}
+
+eval:
+  tasks: [AIME24, MATH500]
+  limit: 5
+  n: {default: 2, MATH500: 2}
+  max_tokens: 2048

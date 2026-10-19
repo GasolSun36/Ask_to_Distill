@@ -1,0 +1,75 @@
+# OPD method constants shared by every arm of every domain.
+# Rendered by ask2distill/opd/launch.py into the exact verl main_ppo overrides
+# the final runs used.
+# Per-pair values are ??? here and set in configs/base/<domain>.yaml or the pair file.
+opd:
+  student: ???
+  teacher: ???
+  adv_estimator: token_reward_direct                         # advantage = reward x mask; no baseline / GAE / group norm
+  grpo_outcome_weight: 1.0                                   # no effect under token_reward_direct
+  log_prob_top_k: 16                                         # top-16 OPD
+  top_k_strategy: only_stu                                   # support = the student's top-16
+  reward_weight_mode: student_p                              # reverse KL weighted by the renormalised student probabilities
+  temperature: 1.0                            # rollout temperature
+  teacher_temperature: 1.0
+  repetition_penalty: 1.0
+  n_responses: 4
+  mini_batch_size: 64                                        # data.train_batch_size = mini x parallel_size
+  parallel_size: 1                                           # ulysses sequence parallel and rollout TP
+  lr: 1.0e-6
+  # fp32 is the paper default and it matters: at lr=1e-6 the relative update
+  # is far below bf16's resolution, so with bf16 master weights updates get
+  # rounded away.
+  model_dtype: fp32
+  rollout_gpu_memory_utilization: 0.8                        # 80GB cards
+  loss_agg_mode: token-mean
+  enable_format_reward: false
+  use_kl: false
+  kl_coef: 0.005                                             # only read when use_kl
+  kl_loss_type: low_var_kl
+  entropy_coeff: 0
+  shuffle: false                                             # every epoch replays the same order
+  filter_overlong_prompts: true                              # drops prompts over max_prompt_length silently
+  truncation: error
+  return_raw_chat: true
+  ppo_micro_batch_size_per_gpu: 1                            # use_dynamic_bsz=True
+  ref_log_prob_micro_batch_size_per_gpu: 1
+  use_remove_padding: true
+  offload:
+    actor_param: true
+    actor_optimizer: true
+    activation: true
+    gradient_checkpointing: true
+    forward_prefetch: true
+    ref_param: true
+    reward_model_param: true
+  reward_model_input_tokenizer: null
+  calculate_log_probs: true
+  # Keep this at 0. verl re-evaluates the expiration check every step and has no
+  # "already saved for expiration" flag, so the trigger window is one save PER
+  # STEP until the job dies. A run with 600 force-saved on steps 114-120:
+  # 7 checkpoints, 6 of them redundant, 120GB of disk.
+  esi_redundant_time: 0
+  val_kwargs: {do_sample: true, n: 16, temperature: 0.7, top_p: 0.95} # never used: test_freq -1
+  max_val_response_length: ???                               # feeds max_model_len and val_kwargs.max_tokens
+  test_freq: -1
+  val_before_train: false
+  log_val_generations: 2
+  n_gpus_per_node: 8
+  nnodes: 1                                                  # every final arm ran on one node
+  resume_mode: auto
+  project_name: OnPolicyDistillation
+  swanlab_mode: local
+  logger: [console, swanlab]
+  train_max_samples: -1                                      # verl default (smoke caps it)
+  val_max_samples: -1                                        # verl default (smoke caps it)
+  chat_template_args: ???
+  max_prompt_length: ???
+  max_response_length: ???
+  test_files: ???
+  custom_reward: ???
+  is_plot: ???
+  esi_save: ???
+  extra_overrides: []
+  forbidden_overrides: []
+  arms: ???

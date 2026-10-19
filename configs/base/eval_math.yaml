@@ -1,0 +1,28 @@
+# Math evaluation (shared by the three Math_* pairs): the protocol the reported
+# numbers were computed with.
+eval:
+  tasks: [AIME24, AIME25, AIME26, AMC23, BRUMO25, MATH500]   # avg6
+  optional_tasks: [HMMT_FEB25, HMMT_FEB26]                   # extra; not part of avg6
+  curve_tasks: [AIME24, AIME25, AMC23]                       # tasks of `a2d eval math --curve`
+  data_dir: ${paths.data}/eval/math
+  task_dirs: {AIME24: AIME24, AIME25: AIME25, AIME26: AIME26, AMC23: AMC23, BRUMO25: BRUMO25,
+              MATH500: MATH-500, HMMT_FEB25: HMMT_FEB25, HMMT_FEB26: HMMT_FEB26} # MATH500 -> MATH-500/test.parquet
+  collect_keys: {AIME24: aime24, AIME25: aime25, AIME26: aime26, AMC23: amc23, BRUMO25: brumo25,
+                 MATH500: math500, HMMT_FEB25: hmmt_feb25, HMMT_FEB26: hmmt_feb26}  # grading_results task_name (lower-cased)
+  n: {default: 16, MATH500: 4}                               # avg@16; MATH500 avg@4
+  max_tokens: 31744
+  temperature: 0.7
+  top_p: 0.95
+  gpu_memory_utilization: 0.9
+  disable_thinking: true                                     # the DeepSeek template ignores it
+  enforce_eager: true
+  strict_boxed: false                                        # "Answer:" fallback on
+  len_tokenizer: ${paths.models}/DeepSeek-R1-Distill-Qwen-1.5B   # avg_output_length statistic only, never a score
+  # Stop ids are the FIRST token of encode("<|im_end|>") and encode("<|endoftext|>").
+  # Under the R1-Distill tokenizer both encode to "<" first, so
+  # token 27 is a stop id for the two DeepSeek-R1-Distill pairs -- kept as run
+  # (docs/DEVIATIONS.md).
+  stop_ids_rule: first_token_of_im_end_and_endoftext
+  limit: null                                                # --limit k: first k problems per task (smoke); null = all
+  engine_seed: null                                          # off in the final runs (one generate per rollout_id, no per-request seed)
+  out_dir: ${paths.out}/eval/math                            # <exp>_step<N>/<task>_t0.7_p0.95_n16-MNT31744.jsonl + grading_results.json

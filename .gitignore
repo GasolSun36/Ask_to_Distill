@@ -1,0 +1,24 @@
+# Every pattern is anchored to the repository root on purpose: an unanchored
+# `models/` would also drop the vendored third_party/verl/verl/models/.
+
+# Data, models and run outputs (fetched or produced at run time).
+/data/*
+!/data/MANIFEST.json
+/models/
+/checkpoints/
+/outputs/
+/.cache/
+
+# Third-party runtime artefacts.
+/third_party/LiveCodeBench/output/
+/third_party/toolorchestra_tau2/data/
+/third_party/toolorchestra_tau2/evaluation/tau2-bench/cut_error_message.json
+
+# Python (egg-info directories come from the editable installs).
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Local settings (copied from the *.example files; may hold site paths).
+/configs/paths.env
+/launchers/slurm/cluster.env

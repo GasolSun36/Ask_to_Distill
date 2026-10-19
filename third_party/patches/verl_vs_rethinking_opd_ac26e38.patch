@@ -1,0 +1,209 @@
+Our changes to the verl fork, relative to Thinking-Space/Rethinking-OPD (formerly thunlp/OPD)
+at ac26e38d6f1572eb027597b48a9f4e01f6915ef8, whose verl/ subtree is unchanged since c6cd96b15e.
+
+Documentation only: third_party/verl/ already contains these changes. Paths are relative to the
+verl project root (Rethinking-OPD's verl/ directory, i.e. third_party/verl/), so the patch applies
+with `patch -p1 -d <Rethinking-OPD>/verl < verl_vs_rethinking_opd_ac26e38.patch`.
+
+Change numbers follow THIRD_PARTY.md:
+  dp_actor.py      1 chunked/checkpointed top-k log_softmax (FINAL), 2 2-D entropy kept (FINAL),
+                   3 3-D log_prob kept (FINAL)
+  ray_trainer.py   4 token ledger/budget (opt-in)
+
+Every other file under third_party/verl/ is byte-identical to the verl tree the final runs
+used, whose verl/verl/ package in turn equals Rethinking-OPD@ac26e38 verl/verl/ file for file
+except dp_actor.py (change 1 above).
+
+--- a/verl/workers/actor/dp_actor.py
++++ b/verl/workers/actor/dp_actor.py
+@@ -196,20 +196,12 @@
+                     if calculate_entropy:
+                         inplace_backward = False
+                     
+-                    # Optimization: when top_k > 0, compute log_softmax once and gather both
+-                    # log_probs and topk_log_probs to avoid duplicate computation and gradient
+-                    # issues from inplace operations
++                    # When top_k > 0 the target/topk log-probs are gathered in a
++                    # token-chunked (and grad-checkpointed) fashion further below,
++                    # so that the fp32 (total_nnz, vocab) log_softmax intermediate
++                    # is never fully materialized (OOMs 40GB GPUs at 16K tokens).
+                     need_topk = top_k > 0
+-                    if need_topk:
+-                        # Compute log_softmax once for both target and topk tokens
+-                        # Note: we don't use inplace_backward here to ensure correct gradients
+-                        # when both log_probs and topk_log_probs are needed
+-                        log_probs_all = torch.log_softmax(logits_rmpad, dim=-1)
+-                        # Gather log_probs for target tokens
+-                        log_probs = log_probs_all.gather(
+-                            dim=-1, index=input_ids_rmpad_rolled.unsqueeze(-1)
+-                        ).squeeze(-1)
+-                    else:
++                    if not need_topk:
+                         log_probs = logprobs_from_logits(
+                             logits=logits_rmpad,
+                             labels=input_ids_rmpad_rolled,
+@@ -267,8 +259,31 @@
+                              # Legacy/Resample behavior
+                              _, topk_ids = torch.topk(logits_rmpad, k=top_k, dim=-1)
+ 
+-                        # Use pre-computed log_probs_all (always available when need_topk=True)
+-                        topk_log_probs = log_probs_all.gather(dim=-1, index=topk_ids)
++                        # Chunked + checkpointed log_softmax gather for target & topk
++                        # tokens: never materializes the full (total_nnz, vocab)
++                        # log-prob tensor in the autograd graph (backward recomputes
++                        # per chunk). Numerically identical to the previous
++                        # full-tensor log_softmax + gather.
++                        gather_idx = torch.cat([input_ids_rmpad_rolled.unsqueeze(-1), topk_ids], dim=-1)
++
++                        def _chunk_gather_logprobs(chunk_logits, chunk_idx):
++                            return torch.log_softmax(chunk_logits, dim=-1).gather(dim=-1, index=chunk_idx)
++
++                        _chunk_size = 1024
++                        _gathered = []
++                        for _s in range(0, logits_rmpad.shape[0], _chunk_size):
++                            _cl = logits_rmpad[_s : _s + _chunk_size]
++                            _ci = gather_idx[_s : _s + _chunk_size]
++                            if torch.is_grad_enabled():
++                                _g = torch.utils.checkpoint.checkpoint(
++                                    _chunk_gather_logprobs, _cl, _ci, use_reentrant=False
++                                )
++                            else:
++                                _g = _chunk_gather_logprobs(_cl, _ci)
++                            _gathered.append(_g)
++                        _gathered = torch.cat(_gathered, dim=0)
++                        log_probs = _gathered[:, 0]
++                        topk_log_probs = _gathered[:, 1:]
+ 
+                 # gather log_prob if sp > 1
+                 if self.use_ulysses_sp:
+@@ -834,14 +849,25 @@
+                         elif "student_top_k_ids" in model_inputs:
+                             student_top_k_ids = model_inputs["student_top_k_ids"]
+ 
+-                        entropy, _, _, topk_log_probs = self._forward_micro_batch(
++                        # log_prob (2D, the sampled token) was dropped here, but the
++                        # use_kl_loss branch below references it -- so use_kl_loss=True
++                        # on the top-k path died with UnboundLocalError. OPD always
++                        # takes the top-k path, and nothing had ever asked it for a KL
++                        # term, so the combination was simply never exercised. The KL
++                        # needs the 2D sampled-token log prob, not the 3D top-k tensor.
++                        entropy, log_prob, _, topk_log_probs = self._forward_micro_batch(
+                             model_inputs, temperature=temperature, calculate_entropy=calculate_entropy,
+                             top_k=top_k, student_top_k_ids=student_top_k_ids
+                         )
+                         log_prob_for_loss = topk_log_probs
+                         
+                     else:
+-                        _, log_prob, *_ = self._forward_micro_batch(
++                        # entropy is the FIRST return value and was being dropped
++                        # here, so entropy_coeff != 0 on this (2D advantage) path
++                        # died with UnboundLocalError further down. The 3D branch
++                        # above already keeps it; OPD only ever exercises 3D, which
++                        # is why this went unnoticed.
++                        entropy, log_prob, *_ = self._forward_micro_batch(
+                             model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
+                         )
+                         log_prob_for_loss = log_prob
+--- a/verl/trainer/ppo/ray_trainer.py
++++ b/verl/trainer/ppo/ray_trainer.py
+@@ -838,6 +838,12 @@
+         dataloader_state_dict = self.train_dataloader.state_dict()
+         torch.save(dataloader_state_dict, dataloader_local_path)
+ 
++        # opt-in token ledger (+trainer.log_token_counts / +trainer.token_budget): cumulative
++        # response-token counters, restored on resume
++        if getattr(self, "_tok_on", False):
++            with open(os.path.join(local_global_step_folder, "token_counts.json"), "w") as f:
++                json.dump(self._tok_state(), f)
++
+         # latest checkpointed iteration tracker (for atomic usage)
+         local_latest_checkpointed_iteration = os.path.join(
+             self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt"
+@@ -904,7 +910,24 @@
+             self.train_dataloader.load_state_dict(dataloader_state_dict)
+         else:
+             print(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
++        if getattr(self, "_tok_on", False):
++            tok_path = os.path.join(global_step_folder, "token_counts.json")
++            if os.path.exists(tok_path):
++                with open(tok_path) as f:
++                    st = json.load(f)
++                self._tok_loss_cum = int(st["loss_response_tokens_cum"])
++                self._tok_gen_cum = int(st["generated_response_tokens_cum"])
++                self._tok_hist = list(st.get("history", []))
++                print(f"[token_budget] restored counters at step {self.global_steps}: loss {self._tok_loss_cum} gen {self._tok_gen_cum}")
++            else:
++                raise RuntimeError(f"[token_budget] resuming from {global_step_folder} without token_counts.json")
+ 
++    def _tok_state(self):
++        return {"step": self.global_steps, "budget": self._tok_budget,
++                "loss_response_tokens_cum": self._tok_loss_cum,
++                "generated_response_tokens_cum": self._tok_gen_cum,
++                "history": self._tok_hist}
++
+     def _start_profiling(self, do_profile: bool) -> None:
+         """Start profiling for all worker groups if profiling is enabled."""
+         if do_profile:
+@@ -983,6 +1006,16 @@
+         )
+ 
+         self.global_steps = 0
++
++        # opt-in token ledger. loss tokens = response tokens the actor loss is taken over
++        # (response_mask x format_mask when present); generated = response_mask. With
++        # +trainer.token_budget=B training stops (and saves) at the first step whose
++        # cumulative loss tokens reach B.
++        self._tok_budget = self.config.trainer.get("token_budget", None)
++        self._tok_budget = int(self._tok_budget) if self._tok_budget else None
++        self._tok_on = bool(self.config.trainer.get("log_token_counts", False)) or self._tok_budget is not None
++        self._tok_loss_cum = self._tok_gen_cum = 0
++        self._tok_hist = []
+ 
+         # load checkpoint before doing anything
+         self._load_checkpoint()
+@@ -2254,6 +2287,22 @@
+                     # implement critic warmup
+                     if self.config.trainer.critic_warmup <= self.global_steps:
+                         # update actor
++                        if self._tok_on:
++                            rm = batch.batch["response_mask"]
++                            n_gen = int(rm.sum().item())
++                            if "format_mask" in batch.batch.keys():
++                                n_loss = int((rm * batch.batch["format_mask"].view(rm.shape[0], -1)).sum().item())
++                            else:
++                                n_loss = n_gen
++                            self._tok_loss_cum += n_loss
++                            self._tok_gen_cum += n_gen
++                            self._tok_hist.append([self.global_steps, n_loss, n_gen])
++                            metrics.update({"tokens/loss_response_tokens": n_loss,
++                                            "tokens/generated_response_tokens": n_gen,
++                                            "tokens/loss_response_tokens_cum": self._tok_loss_cum,
++                                            "tokens/generated_response_tokens_cum": self._tok_gen_cum})
++                            print(f"[token_budget] step {self.global_steps} loss {n_loss} gen {n_gen} "
++                                  f"cum_loss {self._tok_loss_cum} cum_gen {self._tok_gen_cum} budget {self._tok_budget}", flush=True)
+                         with marked_timer("update_actor", timing_raw, color="red"):
+                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
+                             actor_output = self.actor_rollout_wg.update_actor(batch)
+@@ -2265,6 +2314,10 @@
+                     if rollout_data_dir:
+                         self._log_rollout_data(batch, reward_extra_infos_dict, timing_raw, rollout_data_dir)
+ 
++                tok_budget_hit = (self._tok_budget is not None and self._tok_loss_cum >= self._tok_budget)
++                if tok_budget_hit:
++                    is_last_step = True
++
+                 # validate
+                 if (
+                     self.val_reward_fn is not None
+@@ -2296,6 +2349,11 @@
+                         print("Force saving checkpoint: ESI instance expiration approaching.")
+                     with marked_timer("save_checkpoint", timing_raw, color="green"):
+                         self._save_checkpoint()
++                if tok_budget_hit:
++                    with open(os.path.join(self.config.trainer.default_local_dir, "token_budget_reached.json"), "w") as f:
++                        json.dump(self._tok_state(), f)
++                    print(f"[token_budget] budget {self._tok_budget} reached at step {self.global_steps} "
++                          f"(cum loss {self._tok_loss_cum}, gen {self._tok_gen_cum})", flush=True)
+ 
+                 with marked_timer("stop_profile", timing_raw):
+                     next_step_profile = (

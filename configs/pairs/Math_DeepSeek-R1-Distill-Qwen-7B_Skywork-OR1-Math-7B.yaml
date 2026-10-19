@@ -1,0 +1,56 @@
+# Math_DeepSeek-R1-Distill-Qwen-7B_Skywork-OR1-Math-7B
+# Math pair: student DeepSeek-R1-Distill-Qwen-7B <- teacher Skywork-OR1-Math-7B.
+# Per-pair values; shared values are in configs/base/ (paper Appendix A.2). Selection,
+# bank and OPD values are those of the released runs.
+_base_: [../base/opd.yaml, ../base/math.yaml, ../base/eval_math.yaml]
+pair: Math_DeepSeek-R1-Distill-Qwen-7B_Skywork-OR1-Math-7B
+
+models:
+  student: ${paths.models}/DeepSeek-R1-Distill-Qwen-7B
+  teacher: ${paths.models}/Skywork-OR1-Math-7B
+  synthesizer_init: ${paths.models}/DeepSeek-R1-Distill-Qwen-7B-SynNoThink
+  qwen3_nothink: false
+  syn_nothink: true                                          # built by `a2d models syn-nothink --pair Math_DeepSeek-R1-Distill-Qwen-7B_Skywork-OR1-Math-7B`
+  hf:
+    student: {repo: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B, revision: 916b56a44061fd5cd7d6a8fb632557ed4f724f60}
+    teacher: {repo: Skywork/Skywork-OR1-Math-7B, revision: fcef970f1d10682f13c182b280146a194ed57d1e}
+    embedder: {repo: Qwen/Qwen3-Embedding-4B, revision: 5cf2132abc99cad020ac570b19d031efec650f2b}
+
+calib:
+  expected_delta_ref: 0.4867
+
+reward:
+  delta_ref: 0.4867                                          # round(p95, 4)
+
+synrl:
+  experiment: "synthesizer_${pair}"                          # the run restarted from step 0 under its own name
+  # The 7B synthesizer cannot hold params and optimizer resident alongside vLLM.
+  offload: true
+  gpu_memory_utilization: 0.5
+
+select:
+  yield: null
+  chosen_step: 55
+
+harvest:
+  shards: 8
+
+filter:
+  slices: [[0, 1, 2, 3], [4, 5, 6, 7]]
+  aggregate: true
+  agg_order: [0, 1]
+
+bank:
+  name: ${pair}
+  row_id_prefix: b7barm                                      # extra_info.index of the released bank
+  n: 12800
+  pool: ${filter.pool}
+
+opd:
+  chat_template_args: ""
+  arms:
+    # 12800 questions x 2 epochs = 400 steps.
+    ours: {train: "${bank.released}", experiment: "opd_${pair}_ours", total_epochs: 2, save_freq: 20,
+           ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}
+    vanilla: {train: "${paths.data}/real/DAPO-Math-17k.parquet", experiment: "opd_${pair}_vanilla", total_epochs: 1,
+              save_freq: 20, ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}

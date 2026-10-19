@@ -1,0 +1,77 @@
+# Smoke for the code pipeline (Code_Qwen3-4B_Qwen3-4B-Instruct-2507: Qwen3 no-think, code domain,
+# trunc_zero, 2 rolls) on ONE single-node job with 2x A100-80GB.
+# Plumbing only. The 30B and 32B teachers of the other code pairs are covered by
+# render tests.
+#   a2d <stage> --config configs/smoke/code_smoke.yaml [overrides]
+# Every 4B role in training runs in bf16 (fp32 4B on one GPU is ~64GB of state
+# before activations); the synthesizer actor is Qwen3-1.7B.
+_base_: [../pairs/Code_Qwen3-4B_Qwen3-4B-Instruct-2507.yaml]
+smoke: true
+
+models:
+  synthesizer_init: ${paths.models}/Qwen3-1.7B               # single-GPU actor
+
+calib:
+  n_questions: 16                                            # N_cal of the smoke
+  question_sampling: {max_new: 512, gpu_memory_utilization: 0.4}
+  max_new: 1024
+
+reward:
+  max_new: 1024                                              # solver Qwen3-4B + teacher Instruct-2507 + embedder (bf16) on GPU1
+
+synrl:
+  experiment: "synthesizer_${pair}_smoke"
+  layout: {actor_gpus: 1, reward_gpus: 1, reward_nnodes: 1, enable_resource_pool: true}
+  train_batch_size: 2
+  ppo_mini_batch_size: 2
+  rollout_n: 4
+  max_response_length: 512
+  ppo_max_token_len_per_gpu: 4096
+  max_num_batched_tokens: 4096
+  total_steps: 3
+  save_freq: 3
+  offload: true
+  gpu_memory_utilization: 0.35
+  extra_overrides: ["+trainer.max_actor_ckpt_to_keep=1"]
+
+select:
+  sweep: {steps: [3], n: 16, max_new: 512}
+  pick: {min_rows: 8, allow_empty: true}
+  chosen_step: 3
+
+harvest:
+  shards: 2
+  per_shard: 64
+  max_new: 512
+
+filter:
+  slices: [[0], [1]]
+  agg_order: [1, 0]                                          # exercises the explicit ordering
+
+bank:
+  name: "${pair}_smoke"                                      # the smoke bank stage writes ${bank.out}
+  n: 32
+  allow_short: true
+  # OPD Ours trains (and validates) on the pair's RELEASED bank, not
+  # on the 32-row smoke bank: `released` would otherwise follow bank.name.
+  released: ${paths.data}/banks/${pair}.parquet
+
+opd:
+  model_dtype: bf16                                          # Qwen3-4B student over 2 GPUs, teacher offloaded
+  n_gpus_per_node: 2
+  mini_batch_size: 8
+  n_responses: 2
+  max_response_length: 1024
+  max_val_response_length: 1024
+  rollout_gpu_memory_utilization: 0.4
+  train_max_samples: 64
+  val_max_samples: 8                                         # TEST_FILE is the 10k training parquet otherwise
+  extra_overrides: ["trainer.total_training_steps=2", "+trainer.max_actor_ckpt_to_keep=1"]
+  arms:
+    ours: {experiment: "opd_${pair}_smoke_ours", save_freq: 2, ppo_max_token_len_per_gpu: 3072}
+    vanilla: {experiment: "opd_${pair}_smoke_vanilla", save_freq: 1000, ppo_max_token_len_per_gpu: 3072}
+
+eval:
+  lcb: {n: 1, max_tokens: 2048}                              # `a2d eval code --smoke` adds LCB --debug (15 problems)
+  evalplus: {datasets: [humaneval]}                          # full 164: evalplus asserts complete coverage
+  extra_bench: {tp: 1, limit: 5}

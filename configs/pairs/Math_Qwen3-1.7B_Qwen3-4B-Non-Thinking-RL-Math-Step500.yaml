@@ -1,0 +1,63 @@
+# Math_Qwen3-1.7B_Qwen3-4B-Non-Thinking-RL-Math-Step500
+# Math pair: student Qwen3-1.7B (non-thinking) <- teacher Qwen3-4B-Non-Thinking-RL-Math-Step500.
+# Per-pair values; shared values are in configs/base/ (paper Appendix A.2). Selection,
+# bank and OPD values are those of the released runs.
+_base_: [../base/opd.yaml, ../base/math.yaml, ../base/eval_math.yaml]
+pair: Math_Qwen3-1.7B_Qwen3-4B-Non-Thinking-RL-Math-Step500
+
+models:
+  student: ${paths.models}/Qwen3-1.7B
+  teacher: ${paths.models}/Qwen3-4B-Non-Thinking-RL-Math-Step500
+  synthesizer_init: ${models.student}                        # S_θ is initialised from the student
+  qwen3_nothink: true
+  hf:                                                        # pinned from <model>/.cache/huggingface/download/*.metadata
+    student: {repo: Qwen/Qwen3-1.7B, revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e}
+    teacher: {repo: Keven16/Qwen3-4B-Non-Thinking-RL-Math-Step500, revision: 05d82d02780d4a6f8295b2909dbbd89e8a8b5aaa}
+    embedder: {repo: Qwen/Qwen3-Embedding-4B, revision: 5cf2132abc99cad020ac570b19d031efec650f2b}
+
+calib:
+  expected_delta_ref: 1.9049
+
+reward:
+  delta_ref: 1.9049                                          # round(p95, 4)
+
+synrl:
+  experiment: "synthesizer_${pair}"
+  offload: false
+  gpu_memory_utilization: 0.6
+
+select:
+  # Yield = saturation emb count of 5000 questions at seed 100.
+  yield: {candidates: [35, 50, 60], n: 5000, seed: 100, bank_n: 64, tie: earliest}
+  chosen_step: 50
+
+harvest:
+  shards: 16
+
+filter:
+  # ONE 80k saturation pass over all 16 shards; no cross-slice step. Numeric shard order, not lexicographic: the
+  # bank takes the FIRST N questions in this order, and s10 sorting before s2
+  # would change which questions the arm trains on first.
+  slices: [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]]
+  aggregate: false
+  agg_order: null
+
+bank:
+  name: ${pair}
+  row_id_prefix: q3armg9                                     # extra_info.index of the released bank
+  n: 3200                                                    # 50 steps x 64
+  pool: ${filter.out_dir}/sat.s0_questions.jsonl
+  # The filter only yielded 2,889 independent questions (dedup-limited), so
+  # the bank is short of N; the final run trained on all 2,889.
+  allow_short: true
+  expected_rows: 2889
+
+opd:
+  chat_template_args: "+data.apply_chat_template_kwargs.enable_thinking=False"
+  arms:
+    # 2,889 questions is 45 steps per epoch; two epochs replay the same order
+    # (shuffle=False) -> 90 steps, saved on a 5-step grid.
+    ours: {train: "${bank.released}", experiment: "opd_${pair}_ours", total_epochs: 2, save_freq: 5,
+           ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}
+    vanilla: {train: "${paths.data}/real/DAPO-Math-17k.parquet", experiment: "opd_${pair}_vanilla", total_epochs: 2,
+              save_freq: 20, ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}

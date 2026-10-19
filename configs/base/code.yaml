@@ -1,0 +1,223 @@
+# Code-domain values shared by the Code_* pairs (and the starting point of a new
+# code pair). Per-pair values are ???. Comments give the paper symbol of a key
+# where it has one, and the reason for a value where it is not obvious.
+domain: code
+smoke: false
+
+models:
+  student: ???
+  teacher: ???
+  synthesizer_init: ${models.student}
+  embedder: ${paths.models}/Qwen3-Embedding-4B               # frozen: semantic dedup, checkpoint pick, diversity.mode emb
+  qwen3_nothink: ???
+  syn_nothink: false
+  hf: ???
+
+calib:                                                       # stage 0: δ_ref = κ-th percentile of δ_t, as for math (paper §2.3)
+  n_questions: 200                                           # N_cal: questions written by the INITIAL synthesizer (no external data)
+  questions: ${paths.out}/${pair}/calib/calib_questions.jsonl # sampled by `a2d calibrate`; reused when it holds N_cal rows
+  question_sampling:                                         # models.synthesizer_init under the synthesizer-RL prompt
+    topic_seed: 1000                                         # Random(1000) topic rotation over synrl.topics
+    temperature: ${synrl.rollout_temperature}                # as in the synthesizer-RL rollouts
+    top_p: 1.0                                               # as in the synthesizer-RL rollouts (verl default)
+    max_new: ${synrl.max_response_length}                    # L_q, the question budget
+    prompt_head: ${harvest.prompt_head}                      # max_model_len = max_new + prompt_head
+    gpu_memory_utilization: 0.85
+    oversample: 0.25                                         # a round asks for 25% more questions than it still needs
+    max_rounds: 3
+  rolls: 1                                                   # one student solution per question
+  max_new: 4096                                              # = code opd.max_response_length (L_max)
+  qwen3_nothink: ${models.qwen3_nothink}
+  solve_template: lcb                                        # the LiveCodeBench template (calibration, reward, banks and eval)
+  solve_system: ""                                           # no system prompt (calibration, reward, banks and eval alike)
+  temperature: 0.7
+  top_p: 0.95                                                # vLLM, no top_k, EOS kept
+  prompt_head: 1024
+  gpu_memory_utilization: 0.85
+  topk: 16                                                   # K
+  chunk: 128
+  min_tokens: 10
+  percentile: 95                                             # κ
+  round_decimals: 4
+  # 57-62GB of teacher will not share an 80GB card with the student.
+  teacher_device: cuda:1
+  expected_delta_ref: ???
+  out: ${paths.out}/${pair}/calib/calib_delta_ref.json
+
+reward:                                                      # -> reward_config.json -> SynRewardWorker
+  domain: code
+  solver: ${models.student}                                  # the frozen student π_S
+  teacher: ${models.teacher}                                 # the frozen teacher π_T
+  embedder: ${models.embedder}                               # loaded only in diversity.mode emb
+  qwen3_nothink: ${models.qwen3_nothink}
+  solve_template: lcb                                        # same template as calibration, banks and LCB eval
+  solve_system: ""                                           # empty for every final code pair
+  delta_ref: ???                                             # δ_ref: the calibrated percentile, rounded to 4 decimals (`a2d calibrate`)
+  topk: 16                                                   # K
+  chunk: 128
+  use_omega: true
+  len_alpha: 1.0                                             # α = 1: per-token mean
+  len_pen: 0.0                                               # λ_len = 0: no length penalty; truncation is handled by trunc_zero
+  max_new: 4096                                              # L_max = opd.max_response_length
+  rolls: 2                                                   # two solver rollouts per question
+  temperature: 0.7
+  top_p: 0.95
+  sample_top_k: 0                                            # generation_config supplies top_k and, for
+                                                             # Coder-3B, repetition_penalty 1.05
+  # Code solutions are bimodal: a few hundred tokens, or a runaway loop that
+  # rides the cap. A soft length penalty cannot
+  # separate those, so a truncated rollout is dropped from the question's mean
+  # (all truncated -> 0), not counted as 0.
+  trunc_zero: true
+  gen_bs: ???                                                # throughput knob, but batching changes the sampled rollouts: kept per pair
+  min_question_chars: 20
+  min_rollout_tokens: 10
+  fix_eos: false                                             # EOS check on tok.eos_token_id only (true: every stop id)
+  step_counter: local
+  diversity:                                                 # P_div = max(0, 1 - λ_div * share(q)) (paper Eq. 9-10)
+    mode: bleu                                               # bleu: 1 - sentence BLEU over the full scoring batch (paper); emb: embedding cosine per group
+    thresh: 0.1                                              # τ
+    pen: 1.0                                                 # λ_div
+    group: 8                                                 # emb only: rows per clustering group
+    max_len: 512                                             # emb only
+    embed_bs: 16                                             # emb only
+    per_group_embed: true                                    # emb only
+  dump: ${paths.out}/${pair}/synrl/synrl_dump_${synrl.experiment}.jsonl
+
+synrl:
+  experiment: ???
+  prompts: ${paths.out}/${pair}/prompts/SYNRL_TOPICS_CODE.parquet # built by `a2d prompts build` (or by `a2d synrl` when absent)
+  topics: ${paths.repo}/configs/topics/code.yaml             # one topic per prompt, seeded rotation (also used by sweep / harvest)
+  prompt_rows: 4096                                          # rows of the prompt parquet (>= total_steps x train_batch_size)
+  prompt_seed: 0                                             # Random(0) topic rotation of the prompt parquet
+  total_steps: 60
+  save_freq: ???                                             # 5, or 10 for Code_Qwen3-4B_Qwen3-4B-Instruct-2507
+  total_epochs: 1
+  train_batch_size: 8                                        # instructions (GRPO groups) per step
+  rollout_n: 8                                               # g: questions per instruction; 8 x 8 = 64 scored per step
+  ppo_mini_batch_size: 8
+  ppo_micro_batch_size_per_gpu: 1
+  lr: 1.0e-6
+  entropy_coeff: 0.01
+  use_kl_loss: true
+  kl_loss_coef: 0.005
+  kl_loss_type: low_var_kl
+  max_prompt_length: 2048                                    # the topic prompt is a few hundred tokens; nothing is dropped
+  max_response_length: 2048                                  # L_q, the question budget (real statements are p90 ~700 tokens)
+  ppo_max_token_len_per_gpu: 16384
+  max_num_batched_tokens: 16384
+  offload: false
+  gpu_memory_utilization: 0.6
+  rollout_temperature: 1.0
+  rollout_tp: 1
+  model_dtype: fp32
+  ref_param_offload: true
+  use_remove_padding: true
+  gradient_checkpointing: true
+  shuffle: false
+  filter_overlong_prompts: true
+  truncation: error
+  return_raw_chat: true
+  reward_micro_batch_size_per_gpu: 1
+  critic_warmup: 0
+  logger: console
+  project_name: opd_synrl
+  test_freq: -1
+  val_before_train: false
+  resume_mode: auto
+  custom_reward: {path: "${paths.repo}/ask2distill/synrl/rule_reward.py", name: compute_score}
+  # The real-question OPD arm is launched on its own (`a2d opd --arm vanilla`),
+  # not on a third node of this job.
+  layout: {actor_gpus: 8, reward_gpus: 8, reward_nnodes: 1, enable_resource_pool: true}
+  ckpt_dir: ${paths.ckpt}/${synrl.experiment}
+  extra_overrides: []
+  forbidden_overrides: []
+
+select:
+  sweep:
+    steps: ???
+    n: 300
+    max_new: 2048                                            # = the training question budget
+    temperature: 1.0
+    top_p: 0.95
+    topic_seed: 1                                            # Random(1) topic rotation, the same for every checkpoint
+    prompt_head: 2304                                        # max_model_len = max_new + prompt_head
+    gpu_memory_utilization: 0.85
+    strip_thinking: false                                    # raw .strip()-ed text, as the pick thresholds were set on
+    out_dir: ${paths.out}/${pair}/sweep
+  pick:                                                      # code uses only the two coded gates
+    cos_max: 0.85
+    min_eff_clusters: 5
+    eff_cluster_cos: 0.9
+    reward_frac: 0.95
+    reward_window: 2
+    save_freq: ${synrl.save_freq}                            # maps dump steps to checkpoints
+    min_rows: 50
+    allow_empty: false
+    out: ${paths.out}/${pair}/pick.json
+  yield: null                                                # no saturation-yield comparison for code
+  chosen_step: ???
+
+harvest:
+  synthesizer: ${paths.ckpt}/${synrl.experiment}/hf/step_${select.chosen_step}   # not released for the code pairs: retrain to re-harvest
+  shards: 12
+  per_shard: 8000
+  # The seed MUST be a function of the shard (the math campaign once lost eight
+  # parallel shards to byte-identical output) and must NOT be a timestamp, or a
+  # resumed shard replays nothing.
+  seed_formula: "7919*i+104729"                              # topic-rotation seed of shard i
+  temperature: 1.0
+  top_p: 0.95
+  max_new: 2048
+  prompt_head: 2304
+  gpu_memory_utilization: 0.85
+  strip_thinking: true
+  vllm_seed: 0
+  out_dir: ${paths.out}/${pair}/harvest
+
+filter:
+  domain: code
+  slices: ???
+  jaccard: 0.7
+  sat_thr: 0.95
+  embed_bs: 16
+  aggregate: true
+  agg_thr: 0.95
+  agg_order: ???
+  out_dir: ${paths.out}/${pair}/filter
+  pool: ${paths.out}/${pair}/pool.jsonl
+
+bank:
+  name: ???
+  row_id_prefix: ???                                         # extra_info.index = <row_id_prefix>_<i> (the released bank's)
+  n: 10000                                                   # budget-matched to OpenCodeReasoning-10k
+  pool: ${filter.pool}
+  template: lcb_no_system                                    # solve_prompt(q), no system turn
+  refilter: null
+  allow_short: false
+  expected_rows: null
+  out: ${paths.out}/${pair}/banks/${bank.name}.parquet
+  released: ${paths.data}/banks/${bank.name}.parquet
+
+opd:                                                         # synthetic (ours) and real (vanilla) arms share these values
+  student: ${models.student}
+  teacher: ${models.teacher}
+  # 1024 fits DAPO math. A code_contests statement in the LiveCodeBench template
+  # runs p90 938 / p99 1444 / max 1887, and filter_overlong_prompts DROPS
+  # anything over the cap silently -- at 1024 that is 7% of a real arm and a
+  # different 7% of a synthetic one.
+  max_prompt_length: 2048
+  max_response_length: 4096
+  max_val_response_length: 4096                              # max_model_len 6144
+  # val_files has to point at something loadable; it is never scored, and
+  # setting it is what skips the AIME/AMC startup gate.
+  test_files: [train]                                        # the arm's training parquet
+  custom_reward: {path: "${paths.repo}/ask2distill/synrl/rule_reward.py", name: compute_score}
+  # The per-step diagnostic figures are written through swanlab to a shared,
+  # nearly full network filesystem: the driver blocked in a client sync-IO wait
+  # for over an hour at step 1, twice. The plots are diagnostics; the logged scalars are not affected.
+  is_plot: false
+  # The ESI trigger window is "longest step so far + save time"; one 1232s step
+  # stretched it to ~21 minutes and force-saved every step inside it (19
+  # checkpoints, 883GB). Off for code: a resubmit loses at most save_freq steps.
+  esi_save: false

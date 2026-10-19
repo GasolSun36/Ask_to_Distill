@@ -1,0 +1,98 @@
+# TEMPLATE for a new teacher-student pair (README, "Using your own student-teacher pair").
+#
+#   cp configs/pairs/TEMPLATE_custom.yaml configs/pairs/<Domain>_<Student>_<Teacher>.yaml
+#
+# then set `pair:` to the same name and fill in every value marked FILL. The file
+# name is the pair name (`--pair`); files named TEMPLATE_* are not listed as pairs.
+# Every key not set here comes from configs/base/ (the paper's hyperparameters,
+# Appendix A.2); docs/CONFIG.md explains each key. This template uses the MATH
+# bases; for a code pair see the CODE notes below.
+#
+# Order of work: models -> `a2d calibrate` -> reward.delta_ref -> `a2d synrl` ->
+# `a2d select sweep` / `a2d select pick` -> select.chosen_step -> `a2d harvest` ->
+# `a2d filter` (`a2d aggregate`) -> `a2d bank` -> `a2d opd` -> `a2d eval ...`.
+_base_: [configs/base/opd.yaml, configs/base/math.yaml, configs/base/eval_math.yaml]
+# CODE: _base_: [configs/base/opd.yaml, configs/base/code.yaml, configs/base/eval_code.yaml]
+pair: Math_MyStudent_MyTeacher                               # FILL: = the file name, <Domain>_<Student>_<Teacher>
+
+models:
+  # Student π_S and teacher π_T must share one tokenizer / vocabulary (README:
+  # "Prerequisites"); a padded output head of a different size is fine.
+  student: ${paths.models}/MyStudent                         # FILL: local HF directory of π_S
+  teacher: ${paths.models}/MyTeacher                         # FILL: local HF directory of π_T
+  # S_θ starts as a copy of the student. A student that always opens a <think>
+  # block (DeepSeek-R1-Distill style) needs a no-think copy: set syn_nothink:
+  # true, point synthesizer_init at ${models.student}-SynNoThink and run
+  # `a2d models syn-nothink --pair <pair>`.
+  synthesizer_init: ${models.student}
+  syn_nothink: false
+  # true: hybrid Qwen3 student, every chat template gets enable_thinking=False
+  # (synthesizer prompts, solve prompts, OPD). false: templates are used as is.
+  qwen3_nothink: false                                       # FILL
+  hf:                                                        # FILL: pinned revisions for `a2d models download`
+    student: {repo: my-org/MyStudent, revision: 0000000000000000000000000000000000000000}
+    teacher: {repo: my-org/MyTeacher, revision: 0000000000000000000000000000000000000000}
+    embedder: {repo: Qwen/Qwen3-Embedding-4B, revision: 5cf2132abc99cad020ac570b19d031efec650f2b}
+
+calib:
+  expected_delta_ref: null                                   # optional: a previous calibration, for the printed comparison
+  # The calibration questions are sampled from models.synthesizer_init
+  # (N_cal = calib.n_questions = 200); the solve budget calib.max_new must equal
+  # opd.max_response_length (L_max).
+
+reward:
+  # δ_ref: `delta_ref_rounded` of $A2D_OUT/<pair>/calib/calib_delta_ref.json.
+  # `a2d synrl` refuses to start while it is null.
+  delta_ref: null                                            # FILL after `a2d calibrate`
+  # Knobs that depend on the domain (math values in configs/base/math.yaml,
+  # code values in configs/base/code.yaml): len_alpha (α), len_pen (λ_len),
+  # trunc_zero (drop truncated rollouts), rolls (student rollouts per question),
+  # max_new (L_max), diversity.{mode, thresh (τ), pen (λ_div)}.
+  # CODE: gen_bs: 4                                          # questions per generate call on a reward rank (memory)
+
+synrl:
+  experiment: "synthesizer_${pair}"
+  # Memory knobs of the trained synthesizer (8 actor GPUs by default,
+  # synrl.layout): offload actor parameters + optimizer for a >= 4B synthesizer in
+  # fp32, and the vLLM rollout share of each actor GPU.
+  offload: false                                             # FILL: true for a >= 4B synthesizer on 80GB cards
+  gpu_memory_utilization: 0.6
+  # CODE: save_freq: 5
+
+select:
+  yield: null                                                # optional saturation-yield comparison (select.yield_compare)
+  chosen_step: 60                                            # FILL: the step `a2d select pick` reports
+  # CODE: sweep: {steps: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]}
+
+harvest:
+  shards: 16                                                 # N = shards x per_shard raw questions (80,000 here)
+
+filter:
+  slices: [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]] # one slice over all shards (one dedup pass)
+  aggregate: false                                           # true with several slices: cross-slice dedup in agg_order
+  agg_order: null
+  # CODE: slices: [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]]
+  # CODE: agg_order: [0, 1, 2, 3]
+
+bank:
+  name: ${pair}
+  row_id_prefix: my_pair                                     # FILL: extra_info.index = <row_id_prefix>_<i>
+  n: 3200                                                    # FILL: planned OPD steps x 64 questions per step (one epoch)
+  pool: ${filter.out_dir}/sat.s0_questions.jsonl             # one slice: its survivors; several slices: ${filter.pool}
+  # CODE: pool: ${filter.pool}
+
+opd:
+  # Thinking control of the OPD rollouts: "+data.apply_chat_template_kwargs.enable_thinking=False"
+  # for a hybrid Qwen3 student held in non-thinking mode, "" otherwise.
+  chat_template_args: ""                                     # FILL
+  arms:
+    # ours trains on the bank this pair builds; select the evaluated checkpoint
+    # on a held-out validation set, not on the test benchmarks.
+    ours: {train: "${bank.out}", experiment: "opd_${pair}_ours", total_epochs: 1, save_freq: 5,
+           ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}
+    # optional real-question baseline (`a2d data build math` writes DAPO-Math-17k)
+    vanilla: {train: "${paths.data}/real/DAPO-Math-17k.parquet", experiment: "opd_${pair}_vanilla", total_epochs: 1,
+              save_freq: 20, ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}
+    # CODE: vanilla train: "${paths.data}/real/OpenCodeReasoning-10k.parquet" (`a2d data build code-real`)
+
+# CODE: eval: {prompt_style: Qwen3NoThink}                  # or CodeQwenInstruct / ... (ask2distill/eval/code/prompt_style.py)

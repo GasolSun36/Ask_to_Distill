@@ -1,0 +1,365 @@
+diff --git a/lcb_runner/benchmarks/code_generation.py b/lcb_runner/benchmarks/code_generation.py
+index e2e48a7..dd96a7e 100644
+--- a/lcb_runner/benchmarks/code_generation.py
++++ b/lcb_runner/benchmarks/code_generation.py
+@@ -121,9 +121,38 @@ class CodeGenerationProblem:
+         }
+ 
+ 
++# `livecodebench/code_generation_lite` is a script-based HF dataset, and datasets>=4
++# dropped loading scripts (and the `trust_remote_code` kwarg) entirely. Read the jsonl
++# shards straight off the hub instead; the shard->version mapping below is copied from
++# the upstream `code_generation_lite.py` builder so the problem sets are identical.
++_LCB_SHARDS = ["test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl", "test5.jsonl", "test6.jsonl"]
++_LCB_VERSION_SHARDS = {f"release_v{i}": _LCB_SHARDS[:i] for i in range(1, 7)}
++_LCB_VERSION_SHARDS["release_latest"] = list(_LCB_SHARDS)
++for _i in range(1, 7):
++    _LCB_VERSION_SHARDS[f"v{_i}"] = [_LCB_SHARDS[_i - 1]]
++    for _j in range(_i + 1, 7):
++        _LCB_VERSION_SHARDS[f"v{_i}_v{_j}"] = _LCB_SHARDS[_i - 1 : _j]
++
++
++def _load_lcb_jsonl(release_version: str) -> list[dict]:
++    from huggingface_hub import hf_hub_download
++
++    if release_version not in _LCB_VERSION_SHARDS:
++        raise ValueError(
++            f"{release_version} not in {sorted(_LCB_VERSION_SHARDS)}"
++        )
++    rows = []
++    for shard in _LCB_VERSION_SHARDS[release_version]:
++        path = hf_hub_download(
++            "livecodebench/code_generation_lite", shard, repo_type="dataset"
++        )
++        with open(path) as f:
++            rows.extend(json.loads(line) for line in f if line.strip())
++    return rows
++
++
+ def load_code_generation_dataset(release_version="release_v1", start_date=None, end_date=None) -> list[CodeGenerationProblem]:
+-    dataset = load_dataset("livecodebench/code_generation_lite", split="test", version_tag=release_version, trust_remote_code=True)
+-    dataset = [CodeGenerationProblem(**p) for p in dataset]  # type: ignore
++    dataset = [CodeGenerationProblem(**p) for p in _load_lcb_jsonl(release_version)]  # type: ignore
+     if start_date is not None:
+         p_start_date = datetime.strptime(start_date, "%Y-%m-%d")
+         dataset = [e for e in dataset if p_start_date <= e.contest_date]
+diff --git a/lcb_runner/lm_styles.py b/lcb_runner/lm_styles.py
+index d10b211..42080b2 100644
+--- a/lcb_runner/lm_styles.py
++++ b/lcb_runner/lm_styles.py
+@@ -31,6 +31,16 @@ class LMStyle(Enum):
+     QwQ = "QwQ"
+     LLaMa3 = "LLaMa3"
+     DeepSeekR1 = "DeepSeekR1"
++    # Qwen3 in non-thinking mode: same ChatML prompt as CodeQwenInstruct, plus the
++    # empty `<think></think>` block that Qwen3's own chat template injects when
++    # enable_thinking=False. Thinking mode needs no new style -- CodeQwenInstruct
++    # already renders byte-for-byte what apply_chat_template(enable_thinking=True) does.
++    Qwen3NoThink = "Qwen3NoThink"
++    # Renders through the LOCAL model's own chat template instead of a
++    # hand-written one. The per-family styles above each hard-code ChatML, and
++    # LCB's LLaMa3 style downloads a gated meta-llama repo to get its template;
++    # this works for any family without either.
++    AutoTemplate = "AutoTemplate"
+ 
+     TogetherAI = "TogetherAI"
+ 
+@@ -867,5 +877,26 @@ LanguageModelStore: dict[str, LanguageModel] = {
+     lm.model_name: lm for lm in LanguageModelList
+ }
+ 
++
++def get_model(model_name: str, model_style: str | None = None) -> LanguageModel:
++    """Look up `model_name`, registering it on the fly when it is not in the store.
++
++    Lets a local checkpoint be evaluated without editing this file: `--model` becomes a
++    free-form run label (it also names the `output/<label>/` directory) and
++    `--model_style` picks the prompt template.
++    """
++    if model_name in LanguageModelStore:
++        return LanguageModelStore[model_name]
++    if model_style is None:
++        raise KeyError(
++            f"{model_name} is not registered; pass --model_style to register it "
++            f"ad hoc (one of {[s.value for s in LMStyle]})"
++        )
++    lm = LanguageModel(
++        model_name, model_name.split("/")[-1], LMStyle(model_style), datetime.now()
++    )
++    LanguageModelStore[model_name] = lm
++    return lm
++
+ if __name__ == "__main__":
+     print(list(LanguageModelStore.keys()))
+diff --git a/lcb_runner/prompts/code_execution.py b/lcb_runner/prompts/code_execution.py
+index cbf961d..39ed5c7 100644
+--- a/lcb_runner/prompts/code_execution.py
++++ b/lcb_runner/prompts/code_execution.py
+@@ -4,6 +4,22 @@ from lcb_runner.lm_styles import LMStyle
+ from lcb_runner.benchmarks import CodeExecutionProblem
+ 
+ 
++def _qwen_chatml(system_message, user_message, style):
++    """ChatML exactly as Qwen's own template renders it.
++
++    Same construction the codegeneration prompt uses for these two styles: the
++    scaffolding is byte-identical to apply_chat_template(enable_thinking=True),
++    and Qwen3NoThink appends the empty think block that enable_thinking=False adds.
++    Sharing one helper keeps the four scenarios from drifting apart.
++    """
++    from lcb_runner.lm_styles import LMStyle as _S
++    s = (f"<|im_start|>system\n{system_message}<|im_end|>\n"
++         f"<|im_start|>user\n{user_message}<|im_end|>\n<|im_start|>assistant\n")
++    if style == _S.Qwen3NoThink:
++        s += "<think>\n\n</think>\n\n"
++    return s
++
++
+ def make_cot_output_prompt(s):
+     code, input = s
+     return f"""You are given a Python function and an assertion containing an input to the function. Complete the assertion with a literal (no unsimplified expressions, no function calls) containing the output when executing the provided code on the given input, even if the function is incorrect or incomplete. Do NOT output any extra information. Execute the program step by step before arriving at an answer, and provide the full assertion with the correct output in [ANSWER] and [/ANSWER] tags, following the examples.
+@@ -84,6 +100,8 @@ def format_prompt_execution_base(
+     else:
+         prompt = make_direct_output_prompt((code, input))
+ 
++    if LanguageModelStyle in (LMStyle.CodeQwenInstruct, LMStyle.Qwen3NoThink):
++        return _qwen_chatml(system_message, prompt, LanguageModelStyle)
+     if LanguageModelStyle == LMStyle.OpenAIChat:
+         chat_messages = [
+             {
+diff --git a/lcb_runner/prompts/code_generation.py b/lcb_runner/prompts/code_generation.py
+index 22ba3f8..acb586b 100644
+--- a/lcb_runner/prompts/code_generation.py
++++ b/lcb_runner/prompts/code_generation.py
+@@ -206,6 +206,34 @@ def get_base_model_question_template_answer(question: CodeGenerationProblem):
+     return prompt
+ 
+ 
++_AUTO_TOK = {}
++
++
++def _auto_render(system_message, user_message):
++    """Apply the local model's chat template. Path comes from LCB_AUTO_MODEL,
++    which the runner sets from --local_model_path."""
++    import os
++    from transformers import AutoTokenizer
++    path = os.environ["LCB_AUTO_MODEL"]
++    # Some instruct models gate a reasoning mode on a magic system string rather
++    # than a template flag -- Llama-3.1-Nemotron-Nano takes "detailed thinking
++    # on|off". Leaving the default here makes it reason on every problem, which
++    # is a different task from the one the students are scored on.
++    system_message = os.environ.get("LCB_AUTO_SYS", system_message)
++    if path not in _AUTO_TOK:
++        _AUTO_TOK[path] = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
++    tok = _AUTO_TOK[path]
++    msgs = [{"role": "system", "content": system_message},
++            {"role": "user", "content": user_message}]
++    try:
++        s = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True,
++                                    enable_thinking=False)
++    except TypeError:
++        s = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
++    b = tok.bos_token or ""
++    return s[len(b):] if b and s.startswith(b) else s
++
++
+ def format_prompt_generation(
+     question: CodeGenerationProblem, LanguageModelStyle: LMStyle
+ ) -> str:
+@@ -325,6 +353,21 @@ def format_prompt_generation(
+         prompt += f"{get_codeqwen_question_template_answer(question)}"
+         return prompt
+ 
++    if LanguageModelStyle == LMStyle.AutoTemplate:
++        return _auto_render("You are a helpful assistant.",
++                            get_codeqwen_question_template_answer(question)
++                            .replace("<|im_end|>\n", "")
++                            .replace("<|im_start|>assistant\n", ""))
++
++    if LanguageModelStyle == LMStyle.Qwen3NoThink:
++        # Identical to CodeQwenInstruct plus the empty think block that Qwen3's chat
++        # template emits for enable_thinking=False. Without it Qwen3 starts a real
++        # <think> block and the 2k-ish token budget gets spent on reasoning.
++        prompt = f"{PromptConstants.SYSTEM_MESSAGE_CODEQWEN}\n\n"
++        prompt += f"{get_codeqwen_question_template_answer(question)}"
++        prompt += "<think>\n\n</think>\n\n"
++        return prompt
++
+     if LanguageModelStyle == LMStyle.QwQ:
+         prompt = f"{PromptConstants.SYSTEM_MESSAGE_QWEN_QWQ}\n\n"
+         prompt += f"{get_qwen_qwq_question_template_answer(question)}"
+diff --git a/lcb_runner/prompts/self_repair.py b/lcb_runner/prompts/self_repair.py
+index 21ded04..909f12d 100644
+--- a/lcb_runner/prompts/self_repair.py
++++ b/lcb_runner/prompts/self_repair.py
+@@ -1,6 +1,10 @@
+ import json
+ 
+-from anthropic import HUMAN_PROMPT, AI_PROMPT
++try:
++    from anthropic import HUMAN_PROMPT, AI_PROMPT
++except ImportError:
++    HUMAN_PROMPT = None
++    AI_PROMPT = None
+ 
+ from lcb_runner.lm_styles import LMStyle
+ 
+diff --git a/lcb_runner/prompts/test_output_prediction.py b/lcb_runner/prompts/test_output_prediction.py
+index 90d8719..5a0b958 100644
+--- a/lcb_runner/prompts/test_output_prediction.py
++++ b/lcb_runner/prompts/test_output_prediction.py
+@@ -1,6 +1,10 @@
+ import json
+ 
+-from anthropic import HUMAN_PROMPT, AI_PROMPT
++try:
++    from anthropic import HUMAN_PROMPT, AI_PROMPT
++except ImportError:
++    HUMAN_PROMPT = None
++    AI_PROMPT = None
+ 
+ from lcb_runner.lm_styles import LMStyle
+ from lcb_runner.benchmarks import TestOutputPredictionProblem
+@@ -156,10 +160,31 @@ def get_qwen_question_template_answer(question: TestOutputPredictionProblem, tes
+     )
+     return prompt
+ 
++def _qwen_chatml(system_message, user_message, style):
++    """ChatML exactly as Qwen's own template renders it.
++
++    Same construction the codegeneration prompt uses for these two styles: the
++    scaffolding is byte-identical to apply_chat_template(enable_thinking=True),
++    and Qwen3NoThink appends the empty think block that enable_thinking=False adds.
++    Sharing one helper keeps the four scenarios from drifting apart.
++    """
++    from lcb_runner.lm_styles import LMStyle as _S
++    s = (f"<|im_start|>system\n{system_message}<|im_end|>\n"
++         f"<|im_start|>user\n{user_message}<|im_end|>\n<|im_start|>assistant\n")
++    if style == _S.Qwen3NoThink:
++        s += "<think>\n\n</think>\n\n"
++    return s
++
++
+ def format_prompt_test_output(
+     question: TestOutputPredictionProblem, LanguageModelStyle: LMStyle
+ ) -> str:
+     testcase_input = question.test[0].input
++    if LanguageModelStyle in (LMStyle.CodeQwenInstruct, LMStyle.Qwen3NoThink):
++        return _qwen_chatml(PromptConstants.SYSTEM_MESSAGE_CHAT_GENERIC,
++                            get_generic_question_template_test_completion(
++                                question, testcase_input),
++                            LanguageModelStyle)
+     if LanguageModelStyle == LMStyle.OpenAIChat:
+         chat_messages = [
+             {
+diff --git a/lcb_runner/runner/main.py b/lcb_runner/runner/main.py
+index 07902b3..36982d1 100644
+--- a/lcb_runner/runner/main.py
++++ b/lcb_runner/runner/main.py
+@@ -3,7 +3,7 @@ import json
+ 
+ from lcb_runner.runner.parser import get_args
+ from lcb_runner.utils.scenarios import Scenario
+-from lcb_runner.lm_styles import LanguageModelStore
++from lcb_runner.lm_styles import get_model
+ from lcb_runner.runner.runner_utils import build_runner
+ from lcb_runner.utils.path_utils import get_output_path
+ from lcb_runner.evaluation import extract_instance_results
+@@ -18,7 +18,12 @@ from lcb_runner.runner.scenario_router import (
+ def main():
+     args = get_args()
+ 
+-    model = LanguageModelStore[args.model]
++    # AutoTemplate renders through the local model's own tokenizer, which the
++    # prompt functions reach via this variable rather than a new argument
++    # threaded through every scenario.
++    if args.local_model_path:
++        os.environ.setdefault("LCB_AUTO_MODEL", args.local_model_path)
++    model = get_model(args.model, args.model_style)
+     benchmark, format_prompt = build_prompt_benchmark(args)
+     if args.debug:
+         print(f"Running with {len(benchmark)} instances in debug mode")
+diff --git a/lcb_runner/runner/parser.py b/lcb_runner/runner/parser.py
+index a047fc0..6ad5f4f 100644
+--- a/lcb_runner/runner/parser.py
++++ b/lcb_runner/runner/parser.py
+@@ -13,6 +13,12 @@ def get_args():
+         default="gpt-3.5-turbo-0301",
+         help="Name of the model to use matching `lm_styles.py`",
+     )
++    parser.add_argument(
++        "--model_style",
++        type=str,
++        default=None,
++        help="LMStyle name, used to register a --model that is not in `lm_styles.py`",
++    )
+     parser.add_argument(
+         "--local_model_path",
+         type=str,
+@@ -59,6 +65,12 @@ def get_args():
+         "--temperature", type=float, default=0.2, help="Temperature for sampling"
+     )
+     parser.add_argument("--top_p", type=float, default=0.95, help="Top p for sampling")
++    parser.add_argument(
++        "--top_k", type=int, default=-1, help="Top k for sampling (-1 disables it)"
++    )
++    parser.add_argument(
++        "--min_p", type=float, default=0.0, help="Min p for sampling (0 disables it)"
++    )
+     parser.add_argument(
+         "--max_tokens", type=int, default=2000, help="Max tokens for sampling"
+     )
+@@ -100,6 +112,23 @@ def get_args():
+         default=-1,
+         help="Tensor parallel size for vllm",
+     )
++    parser.add_argument(
++        "--max_model_len",
++        type=int,
++        default=None,
++        help="vLLM context length; defaults to the model config's max_position_embeddings",
++    )
++    parser.add_argument(
++        "--gpu_memory_utilization",
++        type=float,
++        default=0.9,
++        help="vLLM GPU memory fraction",
++    )
++    parser.add_argument(
++        "--cuda_graph",
++        action="store_true",
++        help="Turn CUDA graphs back on (upstream forces enforce_eager=True)",
++    )
+     parser.add_argument(
+         "--enable_prefix_caching",
+         action="store_true",
+diff --git a/lcb_runner/runner/vllm_runner.py b/lcb_runner/runner/vllm_runner.py
+index 12f6ddf..f221a0c 100644
+--- a/lcb_runner/runner/vllm_runner.py
++++ b/lcb_runner/runner/vllm_runner.py
+@@ -19,19 +19,23 @@ class VLLMRunner(BaseRunner):
+             tokenizer=model_tokenizer_path,
+             tensor_parallel_size=args.tensor_parallel_size,
+             dtype=args.dtype,
+-            enforce_eager=True,
++            enforce_eager=not getattr(args, "cuda_graph", False),
+             disable_custom_all_reduce=True,
+             enable_prefix_caching=args.enable_prefix_caching,
+             trust_remote_code=args.trust_remote_code,
++            max_model_len=getattr(args, "max_model_len", None),
++            gpu_memory_utilization=getattr(args, "gpu_memory_utilization", 0.9),
+         )
+         self.sampling_params = SamplingParams(
+             n=self.args.n,
+             max_tokens=self.args.max_tokens,
+             temperature=self.args.temperature,
+             top_p=self.args.top_p,
++            top_k=getattr(self.args, "top_k", -1),
++            min_p=getattr(self.args, "min_p", 0.0),
+             frequency_penalty=0,
+             presence_penalty=0,
+-            stop=self.args.stop,
++            stop=[s for s in self.args.stop if s],
+         )
+ 
+     def _run_single(self, prompt: str) -> list[str]:

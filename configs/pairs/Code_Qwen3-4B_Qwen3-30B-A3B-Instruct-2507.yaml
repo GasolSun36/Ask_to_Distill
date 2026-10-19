@@ -1,0 +1,62 @@
+# Code_Qwen3-4B_Qwen3-30B-A3B-Instruct-2507
+# Code pair: student Qwen3-4B (non-thinking) <- teacher Qwen3-30B-A3B-Instruct-2507.
+# Per-pair values; shared values are in configs/base/ (paper Appendix A.2). Selection,
+# bank and OPD values are those of the released runs.
+_base_: [../base/opd.yaml, ../base/code.yaml, ../base/eval_code.yaml]
+pair: Code_Qwen3-4B_Qwen3-30B-A3B-Instruct-2507
+
+models:
+  # Hybrid Qwen3-4B held in non-thinking mode, NOT the single-mode
+  # Instruct-2507: its gap to the teacher is larger, and the gap is what the
+  # divergence reward feeds on. The student's template injects
+  # an empty <think></think> into the PROMPT, which the 2507 teacher never saw.
+  student: ${paths.models}/Qwen3-4B
+  teacher: ${paths.models}/Qwen3-30B-A3B-Instruct-2507
+  qwen3_nothink: true                                        # enable_thinking=False everywhere
+  hf:
+    student: {repo: Qwen/Qwen3-4B, revision: 1cfa9a7208912126459214e8b04321603b3df60c}
+    teacher: {repo: Qwen/Qwen3-30B-A3B-Instruct-2507, revision: 0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe}
+    embedder: {repo: Qwen/Qwen3-Embedding-4B, revision: 5cf2132abc99cad020ac570b19d031efec650f2b}
+
+calib:
+  expected_delta_ref: 3.9756
+
+reward:
+  delta_ref: 3.9756                                          # `a2d calibrate`: p95 of δ_t on 200 initial-synthesizer questions
+  # 30B MoE teacher + solver = 64.4GB of weights on every reward rank, so the
+  # generation batch is capped; the final run used 2.
+  gen_bs: 2
+
+synrl:
+  experiment: "synthesizer_${pair}"
+  save_freq: 5
+
+select:
+  sweep:
+    steps: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+  chosen_step: 60
+
+filter:
+  slices: [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]]     # 4 slices x 3 shards
+  agg_order: [0, 1, 2, 3]                                    # ls order; lexicographic == numeric for 4 slices
+
+bank:
+  name: ${pair}
+  row_id_prefix: code_a_syn10k                               # extra_info.index of the released bank
+  pool: ${paths.out}/${pair}/pool_clean.jsonl
+  # This pair's slice funnel ran under an earlier code_filter; the aggregated
+  # pool was re-filtered with the current one before the bank was rebuilt:
+  # comp_filter + strong_filter salvage (may rewrite text) + exact-string
+  # dedup, 29,675 -> 26,275 rows.
+  refilter: {kind: comp_strong_salvage_exact_dedup, input: "${filter.pool}", output: "${bank.pool}"}
+
+opd:
+  chat_template_args: "+data.apply_chat_template_kwargs.enable_thinking=False"
+  arms:
+    ours: {train: "${bank.released}", experiment: "opd_${pair}_ours", total_epochs: 1, save_freq: 5,
+           ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}
+    vanilla: {train: "${paths.data}/real/OpenCodeReasoning-10k.parquet", experiment: "opd_${pair}_vanilla", total_epochs: 1,
+              save_freq: 5, ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4} # same values as the ours arm
+
+eval:
+  prompt_style: Qwen3NoThink                                 # hybrid Qwen3 in non-thinking mode

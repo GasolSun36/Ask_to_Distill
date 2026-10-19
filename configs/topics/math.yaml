@@ -1,0 +1,39 @@
+# Topic list of the math question synthesizer.
+#
+# Every synthesizer prompt names ONE topic from this list (common/prompts_math.py,
+# SYNTHESIZER_SYSTEM). Topics are assigned by a seeded rotation
+# (common/topics.py): each block of len(topics) consecutive prompts is a fresh
+# shuffle of the whole list, so every topic is used equally often and the same
+# seed always gives the same assignment. The prompt parquet (`a2d prompts
+# build`), the checkpoint sweep and the harvest all draw from this file
+# (synrl.topics), so a synthesizer is always sampled under the conditioning it
+# was trained on.
+#
+# Edit freely for a new pair: one entry per line, short noun phrases. A longer
+# list spreads the questions over more areas; the diversity term of the reward
+# still works inside each topic.
+topics:
+  - algebraic equations and systems of equations
+  - inequalities
+  - functional equations
+  - polynomials and their roots
+  - sequences and series
+  - recurrence relations
+  - divisibility and prime numbers
+  - modular arithmetic and congruences
+  - Diophantine equations
+  - counting and arrangements
+  - the pigeonhole principle and extremal arguments
+  - graph theory
+  - probability
+  - expected value
+  - triangles and circles in plane geometry
+  - coordinate geometry
+  - solid geometry
+  - trigonometry
+  - complex numbers
+  - exponents and logarithms
+  - limits, derivatives and integrals
+  - optimisation of a quantity
+  - games and invariants
+  - statistics and averages

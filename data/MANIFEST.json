@@ -1,0 +1,574 @@
+{
+ "schema": 1,
+ "release": {
+  "name": "ask-to-distill-data",
+  "repo_id": "gasolsun/Ask_to_Distill-data",
+  "revision": null,
+  "created": "2026-10-18T04:27:15Z",
+  "pending": []
+ },
+ "groups": {
+  "calib": {
+   "description": "δ_ref calibration records, one per math / code pair (the configured reward.delta_ref values).",
+   "optional": false
+  },
+  "prompts": {
+   "description": "tau2 synthesizer-RL prompt parquets (the math / code prompts are built from configs/topics by `a2d prompts build`).",
+   "optional": false
+  },
+  "tau2": {
+   "description": "tau2 card pools of the trained tau2 synthesizers.",
+   "optional": false
+  },
+  "banks": {
+   "description": "The synthetic OPD question banks of the seven pairs, fetched from the published HF datasets gasolsun/<pair>; the two agent part banks are built from the tau2 pools.",
+   "optional": false
+  }
+ },
+ "files": [
+  {
+   "path": "banks/Agent_Qwen3-4B_Qwen3-4B-Thinking-2507.parquet",
+   "group": "banks",
+   "md5": "f91717f7024b32336c1c992538813c13",
+   "md5_prefix": "f91717f702",
+   "size": 512156,
+   "rows": 2302,
+   "license": "CC-BY-NC-4.0 (generated tau2 task cards; tau2-bench-derived content MIT)",
+   "provenance": "part-airline + part-retail, concatenated and reindexed",
+   "regenerable": "exact",
+   "builder": "a2d tau2 bank",
+   "note": "",
+   "source": {
+    "kind": "hf",
+    "repo_id": "gasolsun/Agent_Qwen3-4B_Qwen3-4B-Thinking-2507",
+    "path": "data/train-00000-of-00001.parquet",
+    "revision": "2366781656d1b46fd7e1d4b1ed1ac5d8c7aaf5aa"
+   }
+  },
+  {
+   "path": "banks/Agent_Qwen3-4B_Qwen3-4B-Thinking-2507_part-airline.parquet",
+   "group": "banks",
+   "md5": "49e344ae22c857d0b422991f27e2e8db",
+   "md5_prefix": "49e344ae22",
+   "size": 187433,
+   "rows": 976,
+   "license": "CC-BY-NC-4.0 (generated tau2 task cards; tau2-bench-derived content MIT)",
+   "provenance": "pool_v6s50.jsonl, airline cards",
+   "regenerable": "exact",
+   "builder": "a2d data download (built from the released pools) / a2d tau2 bank",
+   "note": "",
+   "source": {
+    "kind": "tau2_bank",
+    "pools": [
+     "tau2/pool_v6s50.jsonl"
+    ],
+    "domains": [
+     "airline"
+    ]
+   }
+  },
+  {
+   "path": "banks/Agent_Qwen3-4B_Qwen3-4B-Thinking-2507_part-retail.parquet",
+   "group": "banks",
+   "md5": "ed68ae76e3d65bb0e65f4accc3bbd3af",
+   "md5_prefix": "ed68ae76e3",
+   "size": 328033,
+   "rows": 1326,
+   "license": "CC-BY-NC-4.0 (generated tau2 task cards; tau2-bench-derived content MIT)",
+   "provenance": "pool_v7s60.jsonl, retail cards",
+   "regenerable": "exact",
+   "builder": "a2d data download (built from the released pools) / a2d tau2 bank",
+   "note": "",
+   "source": {
+    "kind": "tau2_bank",
+    "pools": [
+     "tau2/pool_v7s60.jsonl"
+    ],
+    "domains": [
+     "retail"
+    ]
+   }
+  },
+  {
+   "path": "banks/Code_Qwen2.5-Coder-3B-Instruct_Qwen2.5-Coder-32B-Instruct.parquet",
+   "group": "banks",
+   "md5": "90a37e578e5d99fa425eb57fb339a15f",
+   "md5_prefix": "90a37e578e",
+   "size": 9273019,
+   "rows": 10000,
+   "license": "CC-BY-NC-4.0 (questions written by the trained synthesizer)",
+   "provenance": "the pair's synthesizer @40 (9,981 rows survive the overlong-prompt filter)",
+   "regenerable": "no",
+   "builder": "a2d bank",
+   "note": "",
+   "source": {
+    "kind": "hf",
+    "repo_id": "gasolsun/Code_Qwen2.5-Coder-3B-Instruct_Qwen2.5-Coder-32B-Instruct",
+    "path": "data/train-00000-of-00001.parquet",
+    "revision": "0d0a76699172fdba750921395e3941e0bd624d04"
+   }
+  },
+  {
+   "path": "banks/Code_Qwen3-4B_Qwen3-30B-A3B-Instruct-2507.parquet",
+   "group": "banks",
+   "md5": "a31a6947d63abe563f64a60dbefecb7a",
+   "md5_prefix": "a31a6947d6",
+   "size": 6559248,
+   "rows": 10000,
+   "license": "CC-BY-NC-4.0 (questions written by the trained synthesizer)",
+   "provenance": "the pair's synthesizer @60; rebuilt after the refilter",
+   "regenerable": "no",
+   "builder": "a2d bank",
+   "note": "",
+   "source": {
+    "kind": "hf",
+    "repo_id": "gasolsun/Code_Qwen3-4B_Qwen3-30B-A3B-Instruct-2507",
+    "path": "data/train-00000-of-00001.parquet",
+    "revision": "1d82a6e246a5f313a3a9df1029fe650935cacac5"
+   }
+  },
+  {
+   "path": "banks/Code_Qwen3-4B_Qwen3-4B-Instruct-2507.parquet",
+   "group": "banks",
+   "md5": "c7ecddeb4febdc11d2905c17804fafea",
+   "md5_prefix": "c7ecddeb4f",
+   "size": 8589700,
+   "rows": 10000,
+   "license": "CC-BY-NC-4.0 (questions written by the trained synthesizer)",
+   "provenance": "the pair's synthesizer @50; lexicographic aggregation order (9,992 rows survive the filter)",
+   "regenerable": "no",
+   "builder": "a2d bank",
+   "note": "",
+   "source": {
+    "kind": "hf",
+    "repo_id": "gasolsun/Code_Qwen3-4B_Qwen3-4B-Instruct-2507",
+    "path": "data/train-00000-of-00001.parquet",
+    "revision": "6b4f024e9614dab0b45657dc2b53e79c24b3c85c"
+   }
+  },
+  {
+   "path": "banks/Math_DeepSeek-R1-Distill-Qwen-1.5B_JustRL-DeepSeek-1.5B.parquet",
+   "group": "banks",
+   "md5": "6e284423165417f11fd32e03ab22c3c9",
+   "md5_prefix": "6e28442316",
+   "size": 6333632,
+   "rows": 12800,
+   "license": "CC-BY-NC-4.0 (questions written by the trained synthesizer)",
+   "provenance": "the pair's synthesizer @40",
+   "regenerable": "no",
+   "builder": "a2d bank",
+   "note": "",
+   "source": {
+    "kind": "hf",
+    "repo_id": "gasolsun/Math_DeepSeek-R1-Distill-Qwen-1.5B_JustRL-DeepSeek-1.5B",
+    "path": "data/train-00000-of-00001.parquet",
+    "revision": "babeb1d0129823ef09420772ba9c4602eaafed2a"
+   }
+  },
+  {
+   "path": "banks/Math_DeepSeek-R1-Distill-Qwen-7B_Skywork-OR1-Math-7B.parquet",
+   "group": "banks",
+   "md5": "c90641525de57643401b10f0b3413355",
+   "md5_prefix": "c90641525d",
+   "size": 6467783,
+   "rows": 12800,
+   "license": "CC-BY-NC-4.0 (questions written by the trained synthesizer)",
+   "provenance": "the pair's synthesizer @55",
+   "regenerable": "no",
+   "builder": "a2d bank",
+   "note": "",
+   "source": {
+    "kind": "hf",
+    "repo_id": "gasolsun/Math_DeepSeek-R1-Distill-Qwen-7B_Skywork-OR1-Math-7B",
+    "path": "data/train-00000-of-00001.parquet",
+    "revision": "8a468a098f28a00740334379d8d1c98dc18cd53c"
+   }
+  },
+  {
+   "path": "banks/Math_Qwen3-1.7B_Qwen3-4B-Non-Thinking-RL-Math-Step500.parquet",
+   "group": "banks",
+   "md5": "fd38b03f30a6c359f42b2c1723447c28",
+   "md5_prefix": "fd38b03f30",
+   "size": 436795,
+   "rows": 2889,
+   "license": "CC-BY-NC-4.0 (questions written by the trained synthesizer)",
+   "provenance": "the pair's synthesizer @50; one 80k saturation pass (dedup-limited, target 3200)",
+   "regenerable": "no",
+   "builder": "a2d bank",
+   "note": "",
+   "source": {
+    "kind": "hf",
+    "repo_id": "gasolsun/Math_Qwen3-1.7B_Qwen3-4B-Non-Thinking-RL-Math-Step500",
+    "path": "data/train-00000-of-00001.parquet",
+    "revision": "94b749dad1322152c9d8ec36a59d77de9bd67fdd"
+   }
+  },
+  {
+   "path": "calib/delta_ref/Code_Qwen2.5-Coder-3B-Instruct_Qwen2.5-Coder-32B-Instruct.json",
+   "group": "calib",
+   "md5": "0f327fb196ac08cebba5b5cfcd9b4abb",
+   "md5_prefix": "0f327fb196",
+   "size": 294,
+   "rows": null,
+   "license": "Apache-2.0",
+   "provenance": "δ_ref = 1.3629: `a2d calibrate` (p95 of δ_t on 200 questions of the initial synthesizer, one student rollout each under the 4096-token budget)",
+   "regenerable": "equivalent",
+   "builder": "a2d calibrate",
+   "note": "vLLM sampling is not bit-reproducible: a rerun agrees to a few percent"
+  },
+  {
+   "path": "calib/delta_ref/Code_Qwen3-4B_Qwen3-30B-A3B-Instruct-2507.json",
+   "group": "calib",
+   "md5": "951e8f96ce2111c6e231b56656c9b096",
+   "md5_prefix": "951e8f96ce",
+   "size": 294,
+   "rows": null,
+   "license": "Apache-2.0",
+   "provenance": "δ_ref = 3.9756: `a2d calibrate` (p95 of δ_t on 200 questions of the initial synthesizer, one student rollout each under the 4096-token budget)",
+   "regenerable": "equivalent",
+   "builder": "a2d calibrate",
+   "note": "vLLM sampling is not bit-reproducible: a rerun agrees to a few percent"
+  },
+  {
+   "path": "calib/delta_ref/Code_Qwen3-4B_Qwen3-4B-Instruct-2507.json",
+   "group": "calib",
+   "md5": "747aad5ee13451699d7e02649b2a9d96",
+   "md5_prefix": "747aad5ee1",
+   "size": 295,
+   "rows": null,
+   "license": "Apache-2.0",
+   "provenance": "δ_ref = 3.8221: `a2d calibrate` (p95 of δ_t on 200 questions of the initial synthesizer, one student rollout each under the 4096-token budget)",
+   "regenerable": "equivalent",
+   "builder": "a2d calibrate",
+   "note": "vLLM sampling is not bit-reproducible: a rerun agrees to a few percent"
+  },
+  {
+   "path": "calib/delta_ref/Math_DeepSeek-R1-Distill-Qwen-1.5B_JustRL-DeepSeek-1.5B.json",
+   "group": "calib",
+   "md5": "249682a1c00056b64d58c6ad5aba8b45",
+   "md5_prefix": "249682a1c0",
+   "size": 253,
+   "rows": null,
+   "license": "Apache-2.0",
+   "provenance": "δ_ref = 0.4411: p95 of δ_t on 200 questions of an untrained synthesizer (one question set shared by the three math pairs), one student rollout each under the 7168-token budget",
+   "regenerable": "equivalent",
+   "builder": "a2d calibrate",
+   "note": "vLLM sampling is not bit-reproducible: a rerun agrees to a few percent"
+  },
+  {
+   "path": "calib/delta_ref/Math_DeepSeek-R1-Distill-Qwen-7B_Skywork-OR1-Math-7B.json",
+   "group": "calib",
+   "md5": "155c0275e7e98bff2c65c6336c278d31",
+   "md5_prefix": "155c0275e7",
+   "size": 253,
+   "rows": null,
+   "license": "Apache-2.0",
+   "provenance": "δ_ref = 0.4867: p95 of δ_t on 200 questions of an untrained synthesizer (one question set shared by the three math pairs), one student rollout each under the 7168-token budget",
+   "regenerable": "equivalent",
+   "builder": "a2d calibrate",
+   "note": "vLLM sampling is not bit-reproducible: a rerun agrees to a few percent"
+  },
+  {
+   "path": "calib/delta_ref/Math_Qwen3-1.7B_Qwen3-4B-Non-Thinking-RL-Math-Step500.json",
+   "group": "calib",
+   "md5": "f46f7846ff1db104e1df09dac4e5c6c1",
+   "md5_prefix": "f46f7846ff",
+   "size": 254,
+   "rows": null,
+   "license": "Apache-2.0",
+   "provenance": "δ_ref = 1.9049: p95 of δ_t on 200 questions of an untrained synthesizer (one question set shared by the three math pairs), one student rollout each under the 7168-token budget",
+   "regenerable": "equivalent",
+   "builder": "a2d calibrate",
+   "note": "vLLM sampling is not bit-reproducible: a rerun agrees to a few percent"
+  },
+  {
+   "path": "prompts/GENRL_TAU2_V4.parquet",
+   "group": "prompts",
+   "md5": "d3eeff48b719e9a741c54aed2102681c",
+   "md5_prefix": "d3eeff48b7",
+   "size": 6496086,
+   "rows": 2048,
+   "license": "MIT (derived from tau2-bench domain databases)",
+   "provenance": "tau2 v4 synthesizer prompts (targeted)",
+   "regenerable": "equivalent",
+   "builder": "a2d tau2 build-prompts --version v4",
+   "note": "retail rows depend on set iteration order; the released file is canonical"
+  },
+  {
+   "path": "prompts/GENRL_TAU2_V5.parquet",
+   "group": "prompts",
+   "md5": "7f5e1f263e573fa106949a01c0b11227",
+   "md5_prefix": "7f5e1f263e",
+   "size": 3762517,
+   "rows": 1152,
+   "license": "MIT (derived from tau2-bench domain databases)",
+   "provenance": "tau2 v5 synthesizer prompts (targeted, 1,152 rows)",
+   "regenerable": "equivalent",
+   "builder": "a2d tau2 build-prompts --version v5",
+   "note": ""
+  },
+  {
+   "path": "prompts/GENRL_TAU2_V6.parquet",
+   "group": "prompts",
+   "md5": "ecf2b271f95fad4d89c6bda8a6e98e06",
+   "md5_prefix": "ecf2b271f9",
+   "size": 4043659,
+   "rows": 1152,
+   "license": "MIT (derived from tau2-bench domain databases)",
+   "provenance": "scenario_prompt_v6.build -> rows.json (tau2 env) -> parquet",
+   "regenerable": "equivalent",
+   "builder": "a2d tau2 build-prompts --version v6",
+   "note": ""
+  },
+  {
+   "path": "prompts/GENRL_TAU2_V7.parquet",
+   "group": "prompts",
+   "md5": "0502802cdd10940678aebd88786e00dd",
+   "md5_prefix": "0502802cdd",
+   "size": 5650068,
+   "rows": 1152,
+   "license": "MIT (derived from tau2-bench domain databases)",
+   "provenance": "scenario_prompt_v7.build -> rows.json -> parquet; retail only",
+   "regenerable": "equivalent",
+   "builder": "a2d tau2 build-prompts --version v7",
+   "note": ""
+  },
+  {
+   "path": "tau2/pool_v6s50.jsonl",
+   "group": "tau2",
+   "md5": "df1c3915cf7b13ef5f738d17ed7c3e3b",
+   "md5_prefix": "df1c3915cf",
+   "size": 4729766,
+   "rows": 3996,
+   "license": "CC-BY-NC-4.0 (generated tau2 task cards; tau2-bench-derived content MIT)",
+   "provenance": "v6 synthesizer @50 harvest, 18 targets x 222",
+   "regenerable": "no",
+   "builder": null,
+   "note": "the v4-v7 synthesizer weights were not kept; this pool rebuilds the released banks exactly"
+  },
+  {
+   "path": "tau2/pool_v7s60.jsonl",
+   "group": "tau2",
+   "md5": "b09c74141e115bf1182e69c2c21d223f",
+   "md5_prefix": "b09c74141e",
+   "size": 3243429,
+   "rows": 1600,
+   "license": "CC-BY-NC-4.0 (generated tau2 task cards; tau2-bench-derived content MIT)",
+   "provenance": "v7 synthesizer @60 harvest, retail 4 targets x 400",
+   "regenerable": "no",
+   "builder": null,
+   "note": ""
+  }
+ ],
+ "reference": [
+  {
+   "path": "eval/code/extra_bench/apps_competition.jsonl",
+   "md5": "5a167b0b8dc07836bb922f03f88974ff",
+   "size": 219165966,
+   "rows": 1000,
+   "license": "MIT (codeparrot/apps)",
+   "upstream": "https://huggingface.co/datasets/codeparrot/apps",
+   "builder": "a2d data build code-eval",
+   "provenance": "`a2d data build code-eval` (apps_competition)",
+   "note": ""
+  },
+  {
+   "path": "eval/code/extra_bench/apps_interview1k.jsonl",
+   "md5": "a816bb0818e25c119cabae230cf3711f",
+   "size": 202168654,
+   "rows": 1000,
+   "license": "MIT (codeparrot/apps)",
+   "upstream": "https://huggingface.co/datasets/codeparrot/apps",
+   "builder": "a2d data build code-eval",
+   "provenance": "Random(0).shuffle(apps_interview.jsonl)[:1000], first id apps_2639",
+   "note": ""
+  },
+  {
+   "path": "eval/code/extra_bench/apps_introductory.jsonl",
+   "md5": "755941ca2e3a412422a6ac8bcf93ddba",
+   "size": 277526868,
+   "rows": 1000,
+   "license": "MIT (codeparrot/apps)",
+   "upstream": "https://huggingface.co/datasets/codeparrot/apps",
+   "builder": "a2d data build code-eval",
+   "provenance": "`a2d data build code-eval` (apps_introductory)",
+   "note": ""
+  },
+  {
+   "path": "eval/code/extra_bench/codecontests.jsonl",
+   "md5": "78e07bf74b3e0726355bcbca0a510974",
+   "size": 7544174,
+   "rows": 165,
+   "license": "CC-BY-4.0 (deepmind/code_contests)",
+   "upstream": "https://huggingface.co/datasets/deepmind/code_contests",
+   "builder": "a2d data build code-eval",
+   "provenance": "`a2d data build code-eval` (codecontests)",
+   "note": ""
+  },
+  {
+   "path": "eval/math/AIME24/test.parquet",
+   "md5": "cbb96f6e101ca96e1bf614425d652969",
+   "size": 21388,
+   "rows": 30,
+   "license": "upstream: BytedTsinghua-SIA/AIME-2024",
+   "upstream": "https://huggingface.co/datasets/BytedTsinghua-SIA/AIME-2024",
+   "builder": "a2d data build math",
+   "provenance": "960 rows (30 x 32) deduplicated",
+   "note": ""
+  },
+  {
+   "path": "eval/math/AIME25/test.parquet",
+   "md5": "c8c2f028def95b2479bc78e986b14a59",
+   "size": 30436,
+   "rows": 30,
+   "license": "upstream: math-ai/aime25",
+   "upstream": "https://huggingface.co/datasets/math-ai/aime25",
+   "builder": "a2d data build math",
+   "provenance": "test.jsonl -> verl schema",
+   "note": ""
+  },
+  {
+   "path": "eval/math/AIME26/test.parquet",
+   "md5": "483fd6ce24de2486b1801983ac33fc95",
+   "size": 22832,
+   "rows": 30,
+   "license": "upstream: MathArena/aime_2026",
+   "upstream": "https://huggingface.co/datasets/MathArena/aime_2026",
+   "builder": "a2d data build math",
+   "provenance": "-> verl schema",
+   "note": ""
+  },
+  {
+   "path": "eval/math/AMC23/test.parquet",
+   "md5": "d650aea046ea58054e9b1e87493e5e08",
+   "size": 22414,
+   "rows": 40,
+   "license": "upstream: math-ai/amc23",
+   "upstream": "https://huggingface.co/datasets/math-ai/amc23",
+   "builder": "a2d data build math",
+   "provenance": "float answers -> int strings",
+   "note": ""
+  },
+  {
+   "path": "eval/math/BRUMO25/test.parquet",
+   "md5": "6ba00929be7255b9261e81157ff4bdb4",
+   "size": 20924,
+   "rows": 30,
+   "license": "upstream: MathArena/brumo_2025",
+   "upstream": "https://huggingface.co/datasets/MathArena/brumo_2025",
+   "builder": "a2d data build math",
+   "provenance": "-> verl schema",
+   "note": ""
+  },
+  {
+   "path": "eval/math/HMMT_FEB25/test.parquet",
+   "md5": "fdb7e0b696fc86fcb43b0a263541915f",
+   "size": 20045,
+   "rows": 30,
+   "license": "upstream: MathArena/hmmt_feb_2025",
+   "upstream": "https://huggingface.co/datasets/MathArena/hmmt_feb_2025",
+   "builder": "a2d data build math",
+   "provenance": "-> verl schema (extra task)",
+   "note": ""
+  },
+  {
+   "path": "eval/math/HMMT_FEB26/test.parquet",
+   "md5": "6d27dfb075dc8a83079001fe08220475",
+   "size": 21026,
+   "rows": 33,
+   "license": "upstream: MathArena/hmmt_feb_2026",
+   "upstream": "https://huggingface.co/datasets/MathArena/hmmt_feb_2026",
+   "builder": "a2d data build math",
+   "provenance": "-> verl schema (extra task)",
+   "note": ""
+  },
+  {
+   "path": "eval/math/MATH-500/test.parquet",
+   "md5": "8d8dbacd2788620e6561ab1f1e8325d4",
+   "size": 135624,
+   "rows": 500,
+   "license": "upstream: HuggingFaceH4/MATH-500",
+   "upstream": "https://huggingface.co/datasets/HuggingFaceH4/MATH-500",
+   "builder": "a2d data build math",
+   "provenance": "-> verl schema (directory keeps the hyphen)",
+   "note": ""
+  },
+  {
+   "path": "real/DAPO-Math-17k.parquet",
+   "md5": "a69f9964b6061ad3d670bbaa7f3ef7f7",
+   "size": 3536674,
+   "rows": 17398,
+   "license": "Apache-2.0 (BytedTsinghua-SIA/DAPO-Math-17k)",
+   "upstream": "https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k",
+   "builder": "a2d data build math",
+   "provenance": "BytedTsinghua-SIA/DAPO-Math-17k deduplicated on prompt text (1,791,700 -> 17,398), DAPO prompt with the 'Remember...' tail",
+   "note": ""
+  },
+  {
+   "path": "real/OpenCodeReasoning-10k.parquet",
+   "md5": "b70ed77922ca8f6c95e3650263dc40cd",
+   "size": 9718246,
+   "rows": 10000,
+   "license": "CC-BY-4.0 (OpenCodeReasoning)",
+   "upstream": "https://huggingface.co/datasets/nvidia/OpenCodeReasoning",
+   "builder": "a2d data build ocr && a2d data build code-real",
+   "provenance": "10,000 OpenCodeReasoning statements, Random(0) over sorted(glob(**/*.parquet)), comp_filter + strong_filter, LCB solve template",
+   "note": "selected under an earlier version of code_filter; `a2d data build code-real` runs the same seeded recipe with the current filter and selects a different 10,000 (6,765 shared)"
+  },
+  {
+   "path": "real/tau2-official-train.parquet",
+   "md5": "412640fcb6941a7fd1deffccd9fb8d77",
+   "size": 51069,
+   "rows": 104,
+   "license": "MIT (sierra-research/tau2-bench)",
+   "upstream": "https://github.com/sierra-research/tau2-bench",
+   "builder": "a2d data build tau2",
+   "provenance": "sierra-research/tau2-bench@b7ea907 official train split (airline 30 / retail 74)",
+   "note": ""
+  },
+  {
+   "path": "tau2/domain_ctx.json",
+   "md5": "4872bc2c8cafd36fec74cbceb7d48c91",
+   "size": 79789,
+   "rows": null,
+   "license": "MIT (derived from tau2-bench)",
+   "upstream": "https://github.com/sierra-research/tau2-bench",
+   "builder": "a2d data build tau2",
+   "provenance": "system prompt + tool schemas per domain (`a2d data build tau2`)",
+   "note": ""
+  },
+  {
+   "path": "tau2/tasks_test/airline.json",
+   "md5": "f4fed180669ba3cefb52810041117e30",
+   "size": 45136,
+   "rows": 20,
+   "license": "MIT (sierra-research/tau2-bench)",
+   "upstream": "https://github.com/sierra-research/tau2-bench",
+   "builder": "a2d data build tau2",
+   "provenance": "tau2-bench@b7ea907 test split",
+   "note": ""
+  },
+  {
+   "path": "tau2/tasks_test/retail.json",
+   "md5": "cd3268eb0c3d7202a4f2471e6906045c",
+   "size": 78070,
+   "rows": 40,
+   "license": "MIT (sierra-research/tau2-bench)",
+   "upstream": "https://github.com/sierra-research/tau2-bench",
+   "builder": "a2d data build tau2",
+   "provenance": "tau2-bench@b7ea907 test split",
+   "note": ""
+  },
+  {
+   "path": "tau2/tasks_test/telecom.json",
+   "md5": "be183cabeeb52a7d1ec11e946171185b",
+   "size": 198765,
+   "rows": 40,
+   "license": "MIT (sierra-research/tau2-bench)",
+   "upstream": "https://github.com/sierra-research/tau2-bench",
+   "builder": "a2d data build tau2",
+   "provenance": "tau2-bench@b7ea907 test split",
+   "note": ""
+  }
+ ]
+}

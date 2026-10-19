@@ -1,0 +1,219 @@
+# tau2 agent-domain values: reward environment, synthesizer RL v4..v7, harvest,
+# OPD agent loop and evaluation. The tau2 env-side processes read their settings
+# as TAU2_* environment variables (several modules read them at import time),
+# so ask2distill/tau2/env.py renders the COMPLETE set from this file and no
+# module default is ever relied on.
+domain: tau2
+smoke: false
+
+models:
+  student: ???
+  teacher: ???
+  user_sim_train: ???
+  user_sim_eval: ???
+  embedder: ${paths.models}/Qwen3-Embedding-4B               # diversity embedding
+  qwen3_nothink: true
+  # Chat templates are chosen by ROLE (the base model behind it), never by served
+  # name. A missing template is a hard error: vLLM's fallback is the model's own
+  # template, which silently re-enables thinking for Thinking-2507.
+  templates: ???
+  hf: ???
+
+tau2_data:
+  repo_path: ${paths.third_party}/toolorchestra_tau2         # REPO_PATH (the fork's tau2/utils raises without it)
+  data_dir: ${tau2_data.repo_path}/data/tau2                 # ToolOrchestra data/tau2 @c1c0a40 (downloaded, gitignored)
+  # Not TAU2_DATA: that name collides with the training job's prompt-parquet setting.
+  db_dir_env: A2D_TAU2_DB_DIR
+  db_dir: ${tau2_data.data_dir}/domains
+  domain_ctx: ${paths.data}/tau2/domain_ctx.json             # TAU2_CTX (system prompt + tool schemas)
+  user_guidelines: ${tau2_data.data_dir}/user_simulator/simulation_guidelines.md # fork version, differs from upstream
+  # The fork's llm_utils.py loads AutoTokenizer("Qwen/Qwen3-8B") at import.
+  tokenizer_cache: ${paths.cache}/hf
+  import_tokenizer: {repo: Qwen/Qwen3-8B, revision: b968826d9c46dd6066d109eabc6255188de91218}
+  toolorchestra: {repo: NVlabs/ToolOrchestra, revision: c1c0a4002be128b18accb267aac5ffdc26a28103}
+  upstream_split: {repo: sierra-research/tau2-bench, revision: b7ea9074c1cba482b30687fecdb5c8425fd6f619}   # tasks.json + split_tasks.json only
+  tasks_test: ${paths.data}/tau2/tasks_test                  # airline 20 / retail 40 / telecom 40
+
+reward_env:                                                  # synthesizer reward (env service + worker), rendered to TAU2_*
+  TAU2_K: 6                                                  # student rollouts per card
+  TAU2_KT: 3                                                 # teacher-gate rollouts
+  TAU2_GROUNDING: 1
+  TAU2_TEACHER_GATE: 1
+  TAU2_MAX_TURNS: 12                                         # synthesizer-reward episodes (OPD uses opd.agent_env)
+  TAU2_GATE_TURNS: 10
+  TAU2_PREF_TURNS: 25
+  TAU2_V7_TURNS: 30
+  TAU2_PREF_TEACHER_GATE: 0
+  # The preference judge must be Instruct-2507 (it reuses the user-simulator
+  # client): Thinking-2507 under a short budget always answers NO.
+  TAU2_PREF_JUDGE: 1
+  TAU2_DIVTHRESH: 0.1
+  TAU2_DIVW: 1.0
+  TAU2_SVC_TIMEOUT: 3600
+  TAU2_STUDENT_MODEL: Qwen3-4B                               # served names
+  TAU2_USER_MODEL: Qwen3-4B-Instruct-2507
+  TAU2_TEACHER_MODEL: Qwen3-4B-Thinking-2507
+
+synrl:
+  train_batch_size: 8
+  ppo_mini_batch_size: 8
+  ppo_micro_batch_size_per_gpu: 1
+  rollout_n: 16                                              # 16 cards per prompt
+  lr: 1.0e-6
+  lr_scheduler_type: constant
+  use_kl_loss: true
+  kl_loss_coef: 0.001
+  entropy_coeff: 0.001
+  max_response_length: 1536                                  # one card
+  ppo_max_token_len_per_gpu: prompt_plus_resp                # versions.<v>.max_prompt_length + max_response_length
+  max_num_batched_tokens: 16384
+  gpu_memory_utilization: 0.5
+  offload: true                                              # actor params + optimizer
+  model_dtype: null                                          # not passed in the final runs (verl default); smoke sets bf16
+  train_max_samples: -1                                      # verl default (smoke caps it)
+  ref_param_offload: true
+  use_remove_padding: true
+  gradient_checkpointing: true
+  shuffle: false
+  filter_overlong_prompts: true
+  return_raw_chat: true
+  enable_thinking: false
+  reward_model_path: ${models.student}                       # placeholder; the worker loads no reward model
+  reward_micro_batch_size_per_gpu: 1
+  # No expandable_segments in the tau2 worker, so colocating it with the
+  # synthesizer's vLLM rollout is safe.
+  enable_resource_pool: false
+  n_gpus_per_node: 8                                         # rank batch = 8 x 16 / 8 = 16 cards
+  nnodes: 1
+  critic_warmup: 0
+  logger: console
+  project_name: synrl_tau2
+  total_steps: 60
+  total_epochs: 1
+  save_freq: 5
+  esi_redundant_time: 0
+  test_freq: -1
+  val_before_train: false
+  resume_mode: auto
+  custom_reward: {path: "${paths.repo}/ask2distill/synrl/rule_reward.py", name: compute_score}
+  gen_tokenizer: ${models.student}
+  env_service: {port: 8710}
+  diversity:
+    group: 16                                                # the rank batch (16 cards with 8 actor ranks); unique card <= 15/16
+    scope: valid_only                                        # only parse-valid cards are clustered
+    text: scenario_json                                      # json.dumps(card["scenario"], ensure_ascii=False)
+    thresh: ${reward_env.TAU2_DIVTHRESH}
+    pen: ${reward_env.TAU2_DIVW}
+    max_len: 512
+    embed_bs: 16
+  # When the env service fails, every card of that step scores 0 (svc_down);
+  # kept as run.
+  step_counter: global_steps                                 # dump rows carry verl's global step
+  serve:                                                     # two serve nodes
+    node_maps: ["Qwen3-4B=2|Qwen3-4B-Instruct-2507=3|Qwen3-4B-Thinking-2507=3",
+                "Qwen3-4B=4|Qwen3-4B-Instruct-2507=2|Qwen3-4B-Thinking-2507=2"]
+    gpu_util: 0.90
+    max_len: 32768
+    tp: 1
+    sampling_overrides: none                                 # no --generation-config / sampling flags (generation_config defaults)
+  extra_overrides: []
+  forbidden_overrides: []
+  versions: ???
+
+select:                                                      # synthesizer checkpoint per version
+  # Trailing 4-step window of (valid fraction x mean R over valid cards); the
+  # steps used are synrl.versions.<v>.chosen_step.
+  rule: {window: 4, score: valid_frac_x_mean_R_valid}
+
+harvest:
+  v6: ???
+  v7: ???
+  complete_rule: all_targets_x_per_target                    # counted over targets x per-target
+  redo_errors: [rollout_error, gen_error]                    # infra-failed rows are redone
+  gen_sampling: {temperature: 1.0, max_tokens: 2048}         # top_p / top_k from the server's generation_config
+  serve: {replicas_per_model: 2, nodes: 2, gpu_util: 0.90, max_len: 32768}
+  env: {TAU2_GROUNDING: 1, TAU2_TEACHER_GATE: 1, TAU2_KT: 3} # TAU2_DATA is never set
+  out_dir: ${paths.out}/${pair}/harvest
+
+bank: ???
+
+# Agent-specific OPD. The per-token objective is the math / code one unchanged
+# (configs/base/opd.yaml: top-16 student support, reverse KL weighted by the
+# renormalised student probabilities, token_reward_direct, same lr and fp32).
+# What differs is the trajectory it is applied to: an episode interleaves policy
+# turns, tool outputs and simulated-user turns, and only policy-generated tokens
+# get response_mask = 1, so
+#     L = (1 / sum_t m_t) * sum_t m_t * l_t^OPD,   m_t = 1[token t generated by the student]
+# (advantage and loss are both multiplied by the mask; token-mean counts policy
+# tokens only). See ask2distill/tau2/trainside/agent_loop.py.
+opd:
+  student: ${models.student}
+  teacher: ${models.teacher}
+  chat_template_args: "+data.apply_chat_template_kwargs.enable_thinking=False"
+  max_prompt_length: 6144                                    # system policy + tool schemas + greeting + first user turn
+  max_response_length: 8192                                  # ONE budget shared by all turns: policy tokens (mask 1) and observations (mask 0)
+  max_val_response_length: 8192
+  mini_batch_size: 8                                         # = train_batch_size
+  n_responses: 4                                             # episodes per task card
+  shuffle: true                                              # math / code: false
+  # No test file is set for tau2, so the launcher falls back to the math
+  # validation files, as in the final runs. Inert: test_freq -1.
+  test_files:
+    - ${paths.data}/eval/math/AIME25/test.parquet
+    - ${paths.data}/eval/math/AMC23/test.parquet
+    - ${paths.data}/eval/math/AIME24/test.parquet
+  custom_reward: {path: "${paths.repo}/ask2distill/synrl/rule_reward.py", name: compute_score}
+  is_plot: true
+  esi_save: true                                             # force-save before the wall clock
+  total_training_steps: 200                                  # the reported arm (the run was later extended to 300 steps)
+  ckpt_keep: 3
+  extra_overrides:                                           # appended after the shared OPD overrides, in this order
+    - actor_rollout_ref.rollout.mode=async
+    - actor_rollout_ref.rollout.agent.default_agent_loop=tau2_agent
+    - actor_rollout_ref.rollout.agent.agent_loop_config_path=${paths.repo}/ask2distill/tau2/trainside/agent_loops.yaml
+    - actor_rollout_ref.rollout.multi_turn.format=hermes
+    - trainer.total_training_steps=${opd.total_training_steps}
+    - +trainer.max_actor_ckpt_to_keep=${opd.ckpt_keep}
+  # verl's _dump_generations json-dumps a Tensor from the agent-loop batch and
+  # crashes the first step.
+  forbidden_overrides: [trainer.rollout_data_dir]
+  agent_env:                                                 # delivered to every AgentLoopWorker via runtime_env.env_vars
+    TAU2_MAX_TURNS: 20                                       # at most 20 assistant turns per episode
+    # Stop-on-repeat: when the student's user-facing reply near-duplicates its
+    # previous one, that turn is removed from the sequence and the mask and the
+    # episode ends -- a small model's degenerate sign-off loop never reaches the loss.
+    TAU2_STOP_ON_REPEAT: 1
+    TAU2_REPEAT_SIM: 0.9                                     # near-duplicate = difflib ratio >= 0.9 (first 600 chars)
+    TAU2_MAX_TOOL_CHARS: 2000                                # tool output is truncated before it enters the context (mask 0)
+    TAU2_USER_RETRY_S: 1800
+  # One node serves the user simulator; an arm may override `map` (arms.<arm>.user_sim_serve).
+  user_sim_serve:                                            # frozen user simulator (Qwen3-4B-Instruct-2507, temperature 1.0, 512 tokens per turn)
+    map: ???
+    max_len: 40960
+    gpu_util: 0.90
+    replicas: 1
+  env_service: {port: 8711, workers: 64}                     # env-only: tool calls, no reward
+  arms: ???
+
+eval:
+  domains: [airline, retail, telecom]
+  tasks_dir: ${tau2_data.tasks_test}
+  tag: test4
+  trials: 4
+  user_llm: gpt-4o-mini                                      # evaluation user simulator
+  max_steps: 200
+  concurrency: 12
+  TAU2_MAX_TOKENS: 8000
+  TAU2_ORCHESTRATOR_PROMPT: 0                                # ToolOrchestra's <think>/<message> contract off
+  TAU2_OPENAI_DIRECT: 1                                      # gpt-4o-mini branch
+  openai_env_file: ${paths.openai_env_file}                  # the user's own key file; never copied
+  openai_base_url: https://api.openai.com/v1                 # written explicitly into the temp env file (defeats a relay in ~/.bashrc)
+  # ToolOrchestra routes the agent model to its vLLM client only when the name contains "qwen":
+  # <pair>-<arm short_name>-s<step>; the pair name carries the student's "Qwen3".
+  served_name: "${pair}-{short_exp}-s{step}"                 # rendered by tau2.serve; must contain "qwen"
+  template_role: student
+  serve: {gpus: 1, max_len: 40960, gpu_util: 0.85, sampling_overrides: none} # one GPU per replica; vLLM defaults otherwise
+  watchdog_min: 30                                           # no new result for 30 min -> restart the pass
+  num_tasks: null                                            # tasks per domain counted as complete; null = all. The fork ignores --num-tasks without --task-ids, so to RUN fewer tasks point tasks_dir at trimmed files (tests/smoke/)
+  pass_threshold: 0.999                                      # pass^1 = reward >= 0.999
+  out_dir: ${paths.out}/tau2/outputs

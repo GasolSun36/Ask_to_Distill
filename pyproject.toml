@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ask2distill"
+version = "0.1.0"
+description = "Ask to Distill: learning to synthesize data for on-policy distillation."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+# The core (config, paths, CLI, common text/prompt helpers) needs only these two.
+# Everything heavy is pinned in env/requirements-a2d.lock.txt and installed by
+# env/build_a2d_env.sh; the extras below only name the packages, they do not pin.
+dependencies = [
+    "omegaconf>=2.3",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+train = [
+    "torch",
+    "transformers",
+    "vllm",
+    "ray",
+    "hydra-core",
+    "tensordict",
+    "pandas",
+    "pyarrow",
+    "numpy",
+    "scikit-learn",
+    "nltk",
+    "datasets",
+    "huggingface_hub",
+]
+test = [
+    "pytest>=8",
+]
+
+[project.scripts]
+a2d = "ask2distill.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ask2distill*"]
+
+[tool.setuptools.package-data]
+"ask2distill.tau2" = ["templates/*.jinja"]
+"ask2distill.tau2.trainside" = ["agent_loops.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: needs at least one CUDA GPU",
+    "equiv: GPU / data-dependent checks against configured values (skip without GPUs or models)",
+    "smoke: end-to-end smoke job (2x A100, SLURM)",
+    "hydra: composes verl's hydra config (CPU, slow)",
+    "tau2env: runs under the separate tau2 interpreter ($A2D_TAU2_PYTHON)",
+]

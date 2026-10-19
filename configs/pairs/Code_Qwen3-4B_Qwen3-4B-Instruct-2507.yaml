@@ -1,0 +1,61 @@
+# Code_Qwen3-4B_Qwen3-4B-Instruct-2507
+# Code pair: student Qwen3-4B (non-thinking) <- teacher Qwen3-4B-Instruct-2507.
+# Per-pair values; shared values are in configs/base/ (paper Appendix A.2). Selection,
+# bank and OPD values are those of the released runs.
+_base_: [../base/opd.yaml, ../base/code.yaml, ../base/eval_code.yaml]
+pair: Code_Qwen3-4B_Qwen3-4B-Instruct-2507
+
+models:
+  # Same student as Code_Qwen3-4B_Qwen3-30B-A3B-Instruct-2507, teacher swapped for Qwen's own "4B + more
+  # post-training": single-mode, direct-answer, no reasoning to leak.
+  student: ${paths.models}/Qwen3-4B
+  teacher: ${paths.models}/Qwen3-4B-Instruct-2507
+  qwen3_nothink: true
+  hf:
+    student: {repo: Qwen/Qwen3-4B, revision: 1cfa9a7208912126459214e8b04321603b3df60c}
+    teacher: {repo: Qwen/Qwen3-4B-Instruct-2507, revision: cdbee75f17c01a7cc42f958dc650907174af0554}
+    embedder: {repo: Qwen/Qwen3-Embedding-4B, revision: 5cf2132abc99cad020ac570b19d031efec650f2b}
+
+calib:
+  expected_delta_ref: 3.8221
+
+reward:
+  delta_ref: 3.8221                                          # `a2d calibrate`: p95 of δ_t on 200 initial-synthesizer questions
+  gen_bs: 8                                                  # 4B + 4B of weights per reward rank
+
+synrl:
+  experiment: "synthesizer_${pair}"
+  save_freq: 10                                              # the cadence chosen for this pair
+
+select:
+  sweep:
+    steps: [10, 20, 30, 40, 50, 60]                          # swept incrementally as checkpoints landed
+  chosen_step: 50
+
+filter:
+  # 12 one-shard slices, not 4: the Jaccard
+  # pass compares each question against every earlier survivor in its slice, so
+  # a slice costs ~n^2 -- 24k questions ran 1h26 on the
+  # other two code pairs, 8k run ~10 min.
+  # The in-slice Jaccard then covers only 8k questions and the cross-slice
+  # embedding step removes 29% (61,263 -> 43,575).
+  slices: [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11]]
+  # The aggregate listed the slice files with `ls`, i.e. lexicographic order,
+  # and the bank takes the first N questions in that order (s0 / s10 / s11 supplied
+  # 5,138 / 4,252 / 610). Kept as run.
+  agg_order: [0, 10, 11, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+bank:
+  name: ${pair}                                              # 9,992 rows survive verl's overlong-prompt filter (156 steps)
+  row_id_prefix: code_d_syn10k                               # extra_info.index of the released bank
+
+opd:
+  chat_template_args: "+data.apply_chat_template_kwargs.enable_thinking=False"
+  arms:
+    ours: {train: "${bank.released}", experiment: "opd_${pair}_ours", total_epochs: 1, save_freq: 5,
+           ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}
+    vanilla: {train: "${paths.data}/real/OpenCodeReasoning-10k.parquet", experiment: "opd_${pair}_vanilla", total_epochs: 1,
+              save_freq: 20, ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 4}
+
+eval:
+  prompt_style: Qwen3NoThink

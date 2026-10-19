@@ -1,0 +1,40 @@
+# Topic list of the code (competitive-programming) question synthesizer.
+#
+# Every synthesizer prompt names ONE topic from this list as the technique the
+# intended solution should centre on (common/prompts_code.py,
+# SYNTHESIZER_SYSTEM). Topics are assigned by a seeded rotation
+# (common/topics.py): each block of len(topics) consecutive prompts is a fresh
+# shuffle of the whole list, so every topic is used equally often and the same
+# seed always gives the same assignment. The prompt parquet (`a2d prompts
+# build`), the checkpoint sweep and the harvest all draw from this file
+# (synrl.topics), so a synthesizer is always sampled under the conditioning it
+# was trained on.
+#
+# Only stdin/stdout problems are generated, so interactive problems are not
+# listed. Edit freely for a new pair.
+topics:
+  - greedy algorithms
+  - dynamic programming
+  - shortest paths in graphs
+  - graph traversal and connectivity
+  - trees
+  - string processing
+  - number theory
+  - combinatorics and counting modulo a prime
+  - binary search
+  - two pointers and sliding windows
+  - prefix sums and difference arrays
+  - sorting and ordering
+  - stacks, queues and heaps
+  - segment trees and Fenwick trees
+  - disjoint set union
+  - constructive algorithms
+  - simulation
+  - computational geometry
+  - bit manipulation
+  - game theory
+  - brute force and backtracking
+  - divide and conquer
+  - grids and matrices
+  - hashing
+  - intervals and scheduling

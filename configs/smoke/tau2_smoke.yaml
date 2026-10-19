@@ -1,0 +1,82 @@
+# Smoke for the tau2 pipeline on ONE single-node job with 2x A100-80GB.
+# Plumbing only; the eval numbers are meaningless and must be
+# labelled non-comparable.
+# GPU partitioning: GPU0 runs the vLLM fleet (sequential start, --enforce-eager),
+# GPU1 runs Ray and the trainer; the env service runs on CPU under the tau2
+# interpreter. Served roles stay the real 4B models; trained actors are
+# Qwen3-1.7B in bf16, which uses the `student` template (a pre-check asserts its
+# chat_template is byte-equal to Qwen3-4B's).
+_base_: [../pairs/Agent_Qwen3-4B_Qwen3-4B-Thinking-2507.yaml]
+smoke: true
+
+reward_env:
+  TAU2_K: 2
+  TAU2_V7_TURNS: 8
+  TAU2_GATE_TURNS: 6
+
+synrl:
+  train_batch_size: 2
+  ppo_mini_batch_size: 2
+  rollout_n: 4                                               # 8 cards per step; diversity group 16 = the whole batch
+  n_gpus_per_node: 1
+  total_steps: 2
+  save_freq: 2
+  gpu_memory_utilization: 0.3
+  model_dtype: bf16
+  train_max_samples: 4                                       # first 4 rows of GENRL_TAU2_V7
+  serve:
+    node_maps: ["Qwen3-4B=1|Qwen3-4B-Instruct-2507=1|Qwen3-4B-Thinking-2507=1"]
+    gpu_util: 0.25
+    max_len: 16384
+  # The final runs left the rollout TP at verl's default (2) on 8 GPUs; the
+  # smoke trainer has one GPU, so TP must be 1.
+  extra_overrides: ["+trainer.max_actor_ckpt_to_keep=1", "actor_rollout_ref.rollout.tensor_model_parallel_size=1"]
+  versions:
+    v7: {experiment: "synthesizer_${pair}_v7_smoke", init: "${paths.models}/Qwen3-1.7B", svc_workers: 8, chosen_step: 2}
+
+harvest:
+  v7: {served_name: "${synrl.versions.v7.experiment}", per_target: 2, k: 2, workers: 8,
+       pool: "${harvest.out_dir}/pool_v7_smoke.jsonl"}
+  serve: {replicas_per_model: 1, nodes: 1, gpu_util: 0.2, max_len: 16384}
+
+opd:
+  student: ${paths.models}/Qwen3-1.7B
+  model_dtype: bf16                                          # student and teacher (offloaded) both on GPU1
+  n_gpus_per_node: 1
+  # 4 prompts x 2 responses = 8 trajectories: the agent loop splits the batch
+  # equally over verl's 8 AgentLoopWorkers (rollout.agent.num_workers default;
+  # final run: 8 x 4 = 32), so the batch must be a multiple of 8.
+  mini_batch_size: 4
+  n_responses: 2
+  max_response_length: 4096
+  max_val_response_length: 4096
+  train_max_samples: 16
+  val_max_samples: 4                                         # val files are the math sets, as in the final run
+  total_training_steps: 2
+  ckpt_keep: 1
+  agent_env: {TAU2_MAX_TURNS: 6}
+  user_sim_serve: {map: "Qwen3-4B-Instruct-2507=1"}          # on GPU0
+  arms:
+    ours: {experiment: "opd_${pair}_smoke_ours", save_freq: 2, ppo_max_token_len_per_gpu: 10240}
+    vanilla: {experiment: "opd_${pair}_smoke_vanilla", save_freq: 1000, ppo_max_token_len_per_gpu: 10240,
+              user_sim_serve: {map: "Qwen3-4B-Instruct-2507=1"}}
+
+eval:
+  # Instruct-2507 served locally under the name gpt-4o-mini takes the
+  # gpt-4o-mini branch of LLM_CALL.py with no fork change; run_eval
+  # writes OPENAI_API_KEY=EMPTY and the local base URL into its temp env file.
+  openai_base_url: local
+  trials: 1
+  max_steps: 30
+  num_tasks: 2
+  # Task files written by tests/smoke/run_tau2.sh: the first num_tasks tasks of
+  # each test file with nl_assertions removed. (1) The fork ignores --num-tasks
+  # unless --task-ids is given (tau2/run.py get_tasks returns early), so the
+  # full 20/40/40 split would run. (2) tau2's evaluator always calls the NL-
+  # assertion judge, hard-coded gpt-5 (tau2/config.py), through the OpenAI
+  # branch; the local server only answers gpt-4o-mini and LLM_CALL retries a 404
+  # forever. NL_ASSERTION is not in the reward basis of these tasks (airline:
+  # DB+COMMUNICATE; the first retail/telecom tasks have no assertions), so the
+  # rewards are unchanged.
+  tasks_dir: ${paths.out}/tau2/tasks_smoke
+  served_name: "Qwen3-smoke-s{step}"

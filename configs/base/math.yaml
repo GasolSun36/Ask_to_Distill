@@ -1,0 +1,207 @@
+# Math-domain values shared by the Math_* pairs (and the starting point of a new
+# math pair). Per-pair values are ???. Comments give the paper symbol of a key
+# where it has one, and the reason for a value where it is not obvious.
+domain: math
+smoke: false
+
+models:
+  student: ???
+  teacher: ???
+  synthesizer_init: ???
+  embedder: ${paths.models}/Qwen3-Embedding-4B               # frozen: semantic dedup, checkpoint pick, diversity.mode emb
+  qwen3_nothink: ???
+  syn_nothink: false                                         # true: synthesizer_init is built by `a2d models syn-nothink`
+  hf: ???                                                    # pinned revisions for `a2d models download`
+
+calib:                                                       # stage 0: δ_ref = κ-th percentile of δ_t (paper §2.3)
+  n_questions: 200                                           # N_cal: questions written by the INITIAL synthesizer (no external data)
+  questions: ${paths.out}/${pair}/calib/calib_questions.jsonl # sampled by `a2d calibrate`; reused when it holds N_cal rows
+  question_sampling:                                         # models.synthesizer_init under the synthesizer-RL prompt
+    topic_seed: 1000                                         # Random(1000) topic rotation over synrl.topics
+    temperature: ${synrl.rollout_temperature}                # as in the synthesizer-RL rollouts
+    top_p: 1.0                                               # as in the synthesizer-RL rollouts (verl default)
+    max_new: ${synrl.max_response_length}                    # L_q, the question budget
+    prompt_head: ${harvest.prompt_head}                      # max_model_len = max_new + prompt_head
+    gpu_memory_utilization: 0.85
+    oversample: 0.25                                         # a round asks for 25% more questions than it still needs
+    max_rounds: 3
+  rolls: 1                                                   # one student solution per question
+  max_new: 7168                                              # = opd.max_response_length (L_max): δ_ref is measured on the OPD solve budget
+  qwen3_nothink: ${models.qwen3_nothink}
+  solve_template: math_boxed                                 # "{q}\n\nPlease reason step by step ... \boxed{}."
+  solve_system: ""                                           # no system prompt
+  temperature: 0.7                                           # student sampling for the calibration rollouts
+  top_p: 0.95                                                # vLLM, no top_k, EOS kept
+  prompt_head: 1024                                          # max_model_len = max_new + prompt_head
+  gpu_memory_utilization: 0.85
+  topk: 16                                                   # K: top-K support of δ_t (union of both models' top-16)
+  chunk: 128                                                 # positions per teacher-forced chunk (memory only)
+  min_tokens: 10                                             # rollouts under 10 tokens are skipped; truncated ones are kept
+  percentile: 95                                             # κ: δ_ref = the κ-th percentile of the pooled δ_t
+  round_decimals: 4                                          # the trained δ_ref is the percentile rounded to 4 decimals
+  teacher_device: null                                       # student and teacher share one device for math
+  expected_delta_ref: ???
+  out: ${paths.out}/${pair}/calib/calib_delta_ref.json
+
+reward:                                                      # -> reward_config.json -> SynRewardWorker
+  domain: math
+  solver: ${models.student}                                  # the frozen, untrained student π_S solves each generated question
+  teacher: ${models.teacher}                                 # the frozen teacher π_T
+  embedder: ${models.embedder}                               # loaded only in diversity.mode emb
+  qwen3_nothink: ${models.qwen3_nothink}
+  solve_template: math_boxed
+  solve_system: ""                                           # no system prompt
+  delta_ref: ???                                             # δ_ref: the calibrated percentile, rounded to 4 decimals (`a2d calibrate`)
+  topk: 16                                                   # K: top-16 support, as in OPD
+  chunk: 128
+  use_omega: true                                            # s_t = min(δ_t / (δ_ref + ε), 1) * ω_t (false drops the ω_t factor)
+  len_alpha: 0.5                                             # α: R_raw = sum_t s_t / L^α
+  len_pen: 0.3                                               # λ_len: P_len = 1 - λ_len * min(L / L_max, 1)
+  max_new: 7168                                              # L_max = opd.max_response_length: the question is scored on the budget OPD will use
+  rolls: 1                                                   # one solver rollout per question
+  temperature: 0.7                                           # solver sampling
+  top_p: 0.95
+  sample_top_k: 0                                            # 0 => pass neither top_k nor repetition_penalty,
+                                                             # the model's generation_config supplies them (Qwen3 top_k 20,
+                                                             # R1-Distill: HF default top_k 50)
+  trunc_zero: false                                          # truncated rollouts are scored on their prefix
+  gen_bs: 0                                                  # one generate call per rank batch
+  min_question_chars: 20
+  min_rollout_tokens: 10
+  fix_eos: false                                             # EOS check on tok.eos_token_id only (true: every stop id)
+  step_counter: local                                        # the dump step restarts at 1 every window; select.pick undoes it
+  diversity:                                                 # P_div = max(0, 1 - λ_div * share(q)) (paper Eq. 9-10)
+    mode: bleu                                               # bleu: 1 - sentence BLEU over the full scoring batch (paper); emb: embedding cosine per group
+    thresh: 0.1                                              # τ: distance threshold of the average-linkage clustering
+    pen: 1.0                                                 # λ_div
+    group: 8                                                 # emb only: rows per clustering group (8 = one reward-rank batch with 8 reward ranks)
+    max_len: 512                                             # emb only: embedder max tokens
+    embed_bs: 16                                             # emb only
+    per_group_embed: true                                    # emb only: one embed call per group
+  dump: ${paths.out}/${pair}/synrl/synrl_dump_${synrl.experiment}.jsonl # per-rank dumps .r<rank>, .metrics.r<rank>
+
+synrl:                                                       # synthesizer RL: S_θ (initialised from the student) trained with GRPO
+  experiment: ???
+  prompts: ${paths.out}/${pair}/prompts/SYNRL_TOPICS_MATH.parquet # built by `a2d prompts build` (or by `a2d synrl` when absent); 60 steps read rows 0..479
+  topics: ${paths.repo}/configs/topics/math.yaml             # one topic per prompt, seeded rotation (also used by sweep / harvest)
+  prompt_rows: 4096                                          # rows of the prompt parquet (>= total_steps x train_batch_size)
+  prompt_seed: 0                                             # Random(0) topic rotation of the prompt parquet
+  total_steps: 60
+  save_freq: 5
+  total_epochs: 1
+  train_batch_size: 8                                        # instructions (GRPO groups) per step
+  rollout_n: 8                                               # g: questions per instruction; 8 x 8 = 64 scored per step
+  ppo_mini_batch_size: 8
+  ppo_micro_batch_size_per_gpu: 1
+  lr: 1.0e-6
+  entropy_coeff: 0.01
+  use_kl_loss: true
+  kl_loss_coef: 0.005
+  kl_loss_type: low_var_kl
+  max_prompt_length: 1024
+  max_response_length: 4096                                  # question budget; rollout max_model_len = prompt + response
+  ppo_max_token_len_per_gpu: 16384
+  max_num_batched_tokens: 16384
+  offload: ???                                               # actor params + optimizer offload
+  gpu_memory_utilization: ???
+  rollout_temperature: 1.0                                   # top_p 1.0 / top_k -1 (verl defaults)
+  rollout_tp: 1
+  model_dtype: fp32                                          # master weights; FSDP compute is bf16
+  ref_param_offload: true
+  use_remove_padding: true
+  gradient_checkpointing: true
+  shuffle: false
+  filter_overlong_prompts: true
+  truncation: error
+  return_raw_chat: true
+  reward_micro_batch_size_per_gpu: 1
+  critic_warmup: 0
+  logger: console
+  project_name: opd_synrl
+  test_freq: -1
+  val_before_train: false
+  resume_mode: auto
+  custom_reward: {path: "${paths.repo}/ask2distill/synrl/rule_reward.py", name: compute_score} # logging only; the reward worker's rm_scores win
+  layout: {actor_gpus: 8, reward_gpus: 8, reward_nnodes: 1, enable_resource_pool: true} # node 0: S_θ; node 1: reward pool (student, teacher)
+  ckpt_dir: ${paths.ckpt}/${synrl.experiment}
+  extra_overrides: []
+  forbidden_overrides: []
+
+select:
+  sweep:
+    steps: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]   # every saved checkpoint
+    n: 300                                                   # questions sampled per checkpoint
+    max_new: 4096                                            # = the training question budget
+    temperature: 1.0
+    top_p: 0.95
+    topic_seed: 1                                            # Random(1) topic rotation, the same for every checkpoint
+    prompt_head: 1536
+    gpu_memory_utilization: 0.85
+    strip_thinking: false                                    # the sweep keeps the raw text (the pick thresholds were set on it); the harvest strips
+    out_dir: ${paths.out}/${pair}/sweep
+  pick:
+    cos_max: 0.85
+    min_eff_clusters: 5
+    eff_cluster_cos: 0.9
+    reward_frac: 0.95
+    reward_window: 2                                         # +-2 steps around the checkpoint
+    save_freq: ${synrl.save_freq}                            # maps dump steps to checkpoints (the dump step counter restarts every window)
+    min_rows: 50
+    allow_empty: false                                       # smoke-only relaxation
+    out: ${paths.out}/${pair}/pick.json
+  yield: ???
+  chosen_step: ???
+
+harvest:
+  synthesizer: ${paths.ckpt}/${synrl.experiment}/hf/step_${select.chosen_step}
+  shards: ???
+  per_shard: 5000
+  seed_formula: index                                        # topic-rotation seed = shard index for the math pairs
+  temperature: 1.0
+  top_p: 0.95
+  max_new: 4096
+  prompt_head: 1536                                          # max_model_len = max_new + prompt_head
+  gpu_memory_utilization: 0.85
+  strip_thinking: true
+  vllm_seed: 0                                               # engine seed; the per-shard seed only moves the topic rotation
+  out_dir: ${paths.out}/${pair}/harvest
+
+filter:
+  domain: math
+  slices: ???                                                # shard indices per saturation slice, in listed order
+  jaccard: 0.7                                               # token-overlap dedup inside a slice
+  sat_thr: 0.95                                              # embedding dedup threshold of the saturation pass
+  embed_bs: 16
+  aggregate: ???
+  agg_thr: 0.95                                              # cross-slice embedding dedup threshold
+  agg_order: ???
+  out_dir: ${paths.out}/${pair}/filter
+  pool: ${paths.out}/${pair}/pool.jsonl
+
+bank:
+  name: ???
+  row_id_prefix: ???                                         # extra_info.index = <row_id_prefix>_<i> (the released bank's)
+  n: ???
+  pool: ???
+  template: dapo_prefix_only                                 # DAPO_PREFIX + q, without the "Remember..." tail of the DAPO-17k rows
+  refilter: null
+  allow_short: false
+  expected_rows: null
+  out: ${paths.out}/${pair}/banks/${bank.name}.parquet
+  released: ${paths.data}/banks/${bank.name}.parquet
+
+opd:                                                         # math arms
+  student: ${models.student}
+  teacher: ${models.teacher}
+  max_prompt_length: 1024
+  max_response_length: 7168
+  max_val_response_length: 7168                              # explicit; feeds max_model_len and val_kwargs.max_tokens
+  # The three AIME/AMC parquets are loaded as val_files but never scored --
+  # val_before_train=False and test_freq=-1 -- so they are only a startup gate.
+  test_files:
+    - ${paths.data}/eval/math/AIME25/test.parquet
+    - ${paths.data}/eval/math/AMC23/test.parquet
+    - ${paths.data}/eval/math/AIME24/test.parquet
+  custom_reward: {path: "${paths.third_party}/verl/verl/utils/reward_score/ttrl_math/__init__.py", name: reward_func} # logging only
+  is_plot: true                                              # diagnostic figures
+  esi_save: true                                             # math arms force-save before the wall clock

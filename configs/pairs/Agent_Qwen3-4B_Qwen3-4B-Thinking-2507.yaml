@@ -1,0 +1,90 @@
+# Agent_Qwen3-4B_Qwen3-4B-Thinking-2507
+# Agent (tau2) pair: student Qwen3-4B (non-thinking) <- teacher Qwen3-4B-Thinking-2507 (served non-thinking),
+# user simulator Qwen3-4B-Instruct-2507 in training, gpt-4o-mini in evaluation.
+# Final values only: every value is the one the reported run used.
+_base_: [../base/opd.yaml, ../base/tau2.yaml]
+pair: Agent_Qwen3-4B_Qwen3-4B-Thinking-2507
+
+models:
+  student: ${paths.models}/Qwen3-4B
+  teacher: ${paths.models}/Qwen3-4B-Thinking-2507            # served and used non-thinking
+  user_sim_train: ${paths.models}/Qwen3-4B-Instruct-2507     # also the v6/v7 preference judge
+  user_sim_eval: gpt-4o-mini
+  templates:
+    student: ${paths.repo}/ask2distill/tau2/templates/Qwen3-4B.nothink.jinja
+    synthesizer: ${paths.repo}/ask2distill/tau2/templates/Qwen3-4B.nothink.jinja
+    teacher: ${paths.repo}/ask2distill/tau2/templates/Qwen3-4B-Thinking-2507.nothink.jinja
+    user: null                                               # Instruct-2507 is single-mode: its own template
+  hf:
+    student: {repo: Qwen/Qwen3-4B, revision: 1cfa9a7208912126459214e8b04321603b3df60c}
+    teacher: {repo: Qwen/Qwen3-4B-Thinking-2507, revision: 768f209d9ea81521153ed38c47d515654e938aea}
+    user_sim_train: {repo: Qwen/Qwen3-4B-Instruct-2507, revision: cdbee75f17c01a7cc42f958dc650907174af0554}
+    embedder: {repo: Qwen/Qwen3-Embedding-4B, revision: 5cf2132abc99cad020ac570b19d031efec650f2b}
+
+synrl:
+  # The synthesizer chain: each version starts from the previous version's chosen
+  # (merged) checkpoint. Synthesizer weights v4-v7 were not kept; the chain has to
+  # be retrained to re-harvest.
+  # v4 history: its first two windows ran max_prompt_length 5632 with 8192
+  # batched tokens; the repo uses the steady-state 7168 / 16384 (documented
+  # deviation).
+  versions:
+    v4: {experiment: "synthesizer_${pair}_v4", prompts: "${paths.data}/prompts/GENRL_TAU2_V4.parquet", reward_v: 4,
+         init: "${models.student}", max_prompt_length: 7168, svc_workers: 32, chosen_step: 40,
+         dump: "${paths.out}/${pair}/synrl/dump_${synrl.versions.v4.experiment}.jsonl"}
+    v5: {experiment: "synthesizer_${pair}_v5", prompts: "${paths.data}/prompts/GENRL_TAU2_V5.parquet", reward_v: 5,
+         init: "${paths.ckpt}/${synrl.versions.v4.experiment}/hf/step_${synrl.versions.v4.chosen_step}",
+         max_prompt_length: 8192, svc_workers: 32, chosen_step: 40,
+         dump: "${paths.out}/${pair}/synrl/dump_${synrl.versions.v5.experiment}.jsonl"}
+    v6: {experiment: "synthesizer_${pair}_v6", prompts: "${paths.data}/prompts/GENRL_TAU2_V6.parquet", reward_v: 6,
+         init: "${paths.ckpt}/${synrl.versions.v5.experiment}/hf/step_${synrl.versions.v5.chosen_step}",
+         max_prompt_length: 8192, svc_workers: 64, chosen_step: 50,
+         dump: "${paths.out}/${pair}/synrl/dump_${synrl.versions.v6.experiment}.jsonl"}
+    v7: {experiment: "synthesizer_${pair}_v7", prompts: "${paths.data}/prompts/GENRL_TAU2_V7.parquet", reward_v: 7,
+         init: "${paths.ckpt}/${synrl.versions.v6.experiment}/hf/step_${synrl.versions.v6.chosen_step}",
+         max_prompt_length: 10240, svc_workers: 64, chosen_step: 60,
+         dump: "${paths.out}/${pair}/synrl/dump_${synrl.versions.v7.experiment}.jsonl"} # v7 starts from v6 @50
+
+select:
+  # Each merged synthesizer is served under its directory name,
+  # <experiment>_step<N>; the harvest addresses it by that name.
+  served_names: {v6: "${synrl.versions.v6.experiment}_step${synrl.versions.v6.chosen_step}",
+                 v7: "${synrl.versions.v7.experiment}_step${synrl.versions.v7.chosen_step}"}
+
+harvest:
+  v6: {synthesizer: "${paths.ckpt}/${synrl.versions.v6.experiment}/hf/step_${synrl.versions.v6.chosen_step}",
+       served_name: "${select.served_names.v6}",
+       per_target: 222, targets: 18, seed0: 1500000, k: 2, workers: 96,
+       pool: "${harvest.out_dir}/pool_v6s50.jsonl"}
+  v7: {synthesizer: "${paths.ckpt}/${synrl.versions.v7.experiment}/hf/step_${synrl.versions.v7.chosen_step}",
+       served_name: "${select.served_names.v7}",
+       per_target: 400, targets: 4, seed0: 2500000, k: 2, workers: 96,
+       pool: "${harvest.out_dir}/pool_v7s60.jsonl"}
+
+bank:
+  # Released pools rebuild the released banks exactly (verified). Every card no
+  # gate rejected is kept, deduped by task identity; v6 retail cards are dropped.
+  parts:
+    - {pool: "${paths.data}/tau2/pool_v6s50.jsonl", domains: [airline], out: "${pair}_part-airline"} # airline cards of the v6 pool
+    - {pool: "${paths.data}/tau2/pool_v7s60.jsonl", domains: [retail], out: "${pair}_part-retail"} # retail cards of the v7 pool
+  mix: ${pair}                                               # concatenate the parts, renumber extra_info.index
+  out_dir: ${paths.out}/${pair}/banks
+  released: ${paths.data}/banks/${bank.mix}.parquet          # 2,302 rows (976 airline + 1,326 retail)
+
+# OPD: the shared top-16 OPD objective (configs/base/opd.yaml) on masked
+# multi-turn trajectories -- only student-generated tokens are scored, tool and
+# user-simulator turns are context (mask 0), a near-duplicate reply ends the
+# episode (stop-on-repeat), and one 8,192-token budget covers the whole
+# episode (configs/base/tau2.yaml opd.*; docs/TAU2.md, "Agent-specific OPD").
+opd:
+  user_sim_serve: {map: "Qwen3-4B-Instruct-2507=4"}          # synthetic arm: four simulator replicas
+  arms:
+    ours: {train: "${bank.released}", experiment: "opd_${pair}_ours", short_name: ours,
+           total_epochs: 1000, total_steps: "${opd.total_training_steps}", save_freq: 20,
+           ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 8}
+    # Trained in the 3-node two-arm job; its first window saved every 50 and kept 8,
+    # later windows 20 / 3.
+    vanilla: {train: "${paths.data}/real/tau2-official-train.parquet", experiment: "opd_${pair}_vanilla", short_name: vanilla,
+              total_epochs: 1000, total_steps: "${opd.total_training_steps}", save_freq: 20,
+              ppo_max_token_len_per_gpu: 16384, reward_micro_bs: 8,
+              user_sim_serve: {map: "Qwen3-4B-Instruct-2507=2"}}
