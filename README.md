@@ -6,7 +6,12 @@
 
 <h3 align="center">Learning to Synthesize Data for On-Policy Distillation</h3>
 
+
 <p align="center">
+    📄 <a href="https://arxiv.org/abs/2610.27450"><b>Paper</b></a>
+    &nbsp;|&nbsp;
+    💻 <a href="https://github.com/GasolSun36/Ask_to_Distill"><b>GitHub</b></a>
+    &nbsp;|&nbsp;
     🤗 <a href="https://huggingface.co/collections/gasolsun/ask-to-distill-model-and-data-collection"><b>Models &amp; Data</b></a>
 </p>
 
@@ -531,6 +536,23 @@ the maintainers of [vLLM](https://github.com/vllm-project/vllm),
 [LiveCodeBench](https://github.com/LiveCodeBench/LiveCodeBench),
 [EvalPlus](https://github.com/evalplus/evalplus), [tau2-bench](https://github.com/sierra-research/tau2-bench)
 and [ToolOrchestra](https://github.com/NVlabs/ToolOrchestra), which we use for serving and evaluation.
+
+## How to cite:
+
+If you extend or use this work, please cite the [paper](https://arxiv.org/abs/2610.27450) where it was introduced:
+
+```
+@misc{sun2026askdistilllearningsynthesize,
+      title={Ask to Distill: Learning to Synthesize Data for On-Policy Distillation}, 
+      author={Jiashuo Sun and Hao Zhang and Xueqiang Xu and Heng Wang and Yixuan Xie and Pengcheng Jiang and Zhenrui Yue and Jiajun Fan and Peiran Li and Ge Liu and Shaowen Wang and Jiawei Han},
+      year={2026},
+      eprint={2610.27450},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2610.27450}, 
+}
+```
+
 
 ## License
 
